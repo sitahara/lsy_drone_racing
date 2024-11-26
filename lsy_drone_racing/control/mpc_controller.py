@@ -48,7 +48,7 @@ class MPCController(BaseController):
         mass = 0.27  # kg
         g = 9.81  # m/s^2
         vg = np.array([0, 0, -g]).T
-       # arm_length = 0.042 # m
+         # arm_length = 0.042 # m
         J = np.diag([1.395e-5, 1.436e-5, 2.173e-5]) # kg*m^2 , diag(J_xx,J_yy,J_zz) 
         J_inv = np.linalg.inv(J)
         
