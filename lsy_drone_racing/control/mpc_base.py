@@ -26,6 +26,10 @@ class MPCController(BaseController):
         self._tick = 0
         self.t_step = 1 / initial_info["env_freq"]  # Time step
         self.n_horizon = 40  # Prediction horizon
+        self.tick = 0  # running tick that indicates when optimization problem should be reexecuted
+        self.cycles_to_update = (
+            3  # after how many control calls the optimization problem is reexecuted
+        )
         # Define the system parameters
         self.mass = initial_info["drone_mass"]  # kg
         self.g = 9.81  # m/s^2
@@ -118,28 +122,29 @@ class MPCController(BaseController):
             "t_step": self.t_step,
             "state_discretization": "collocation",
             "collocation_type": "radau",
-            "collocation_deg": 2,  # optimize the degree of the collocation
-            "collocation_ni": 2,  # optimize the number of the collocation
+            "collocation_deg": 3,  # TODO optimize the degree of the collocation
+            "collocation_ni": 2,  # TODO optimize the number of the collocation
             "store_full_solution": True,
             # "open_loop": False,
             "nlpsol_opts": {
-                # "ipopt.linear_solver": "ma27",
-                "ipopt.max_iter": 20,
-                "ipopt.tol": 1e-7,
+                # "ipopt.linear_solver": "ma27", # TODO get ma27 solver
+                "ipopt.max_iter": 10,  # TODO optimize
+                "ipopt.tol": 1e-5,  # TODO optimize
                 "ipopt.print_level": 0,  # Suppress IPOPT output
                 "print_time": 0,  # Suppress IPOPT timing output
             },
         }
         self.mpc.set_param(**setup_mpc)
 
-        # Define the constraints and scaling
-        # Rotor rates, these are the base of the constraints
+        # Define the constraints and scaling ######################
+
+        # Rotor rates, these are the base of the control constraints
         rpm_min = 4070.3**2  # lower bound for rotor rates
         rpm_max = (4070.3 + 0.2685 * 65535) ** 2  # upper bound for rotor rates
 
-        # thrust
+        # total thrust
         thrust_lb = 0.3 * self.mass * self.g  # lower bound for thrust to avoid tumbling
-        thrust_ub = self.ct * 4 * rpm_max  # upper bound for thrust
+        thrust_ub = self.ct * 4 * rpm_max  # upper bound for thrust as maximum achievable
         self.mpc.scaling["_u", "thrust"] = thrust_ub - thrust_lb
         self.mpc.bounds["lower", "_u", "thrust"] = thrust_lb
         self.mpc.bounds["upper", "_u", "thrust"] = thrust_ub
@@ -224,33 +229,38 @@ class MPCController(BaseController):
         eul_ang = obs["rpy"]  # euler angles roll, pitch, yaw
         deul_ang = obs["ang_vel"]  # angular velocity in body frame
         current_state = np.concatenate([pos, vel, eul_ang, deul_ang])
-        # Get the control input from the MPC
 
-        u = self.mpc.make_step(current_state)
+        # Update MPC controls and data. Only executed every self.cycles_to_update calls
+        if self.tick == 0:
+            # Note: initial guess is automatically updated with last solution
+            u = self.mpc.make_step(current_state)
 
         print("current time:", self.mpc.t0)
-
+        # Plotting the predicted states of prediction horizon for debuging
         next_poss = self.mpc.data.prediction(("_x", "pos"))[:, :, 0]
-        for k in range(self.n_horizon):
-            p.addUserDebugLine(
-                next_poss[:, k],
-                next_poss[:, k + 1],
-                lineColorRGB=[0, 0, 1],  # Blue color
-                lineWidth=2,
-                lifeTime=self.t_step * 4,  # 0 means the line persists indefinitely
-                physicsClientId=0,
-            )
+        try:
+            for k in range(self.n_horizon):
+                p.addUserDebugLine(
+                    next_poss[:, k],
+                    next_poss[:, k + 1],
+                    lineColorRGB=[0, 0, 1],  # Blue color
+                    lineWidth=2,
+                    lifeTime=self.t_step * 4,  # 0 means the line persists indefinitely
+                    physicsClientId=0,
+                )
+        except p.error:
+            ...
 
         # Extract the next predicted states from the MPC
-        next_pos = self.mpc.data.prediction(("_x", "pos"))[:, 1, 0]
+        next_pos = self.mpc.data.prediction(("_x", "pos"))[:, self.tick + 1, 0]
         print("next_pos: ", next_pos)
-        next_vel = self.mpc.data.prediction(("_x", "vel"))[:, 1, 0]
+        next_vel = self.mpc.data.prediction(("_x", "vel"))[:, self.tick + 1, 0]
         acc = (
-            self.mpc.data.prediction(("_x", "vel"))[:, 1, 0]
-            - self.mpc.data.prediction(("_x", "vel"))[:, 0, 0]
+            self.mpc.data.prediction(("_x", "vel"))[:, self.tick + 1, 0]
+            - self.mpc.data.prediction(("_x", "vel"))[:, self.tick, 0]
         ) / self.t_step
-        next_eul_ang = self.mpc.data.prediction(("_x", "eul_ang"))[:, 1, 0]
-        next_deul_ang = self.mpc.data.prediction(("_x", "deul_ang"))[:, 1, 0]
+        next_eul_ang = self.mpc.data.prediction(("_x", "eul_ang"))[:, self.tick + 1, 0]
+        next_deul_ang = self.mpc.data.prediction(("_x", "deul_ang"))[:, self.tick + 1, 0]
         # u = np.array([self.ct * np.sum(rpm), self.rpmToTorqueMat @ rpm])
 
         # action: Full-state command [x, y, z, vx, vy, vz, ax, ay, az, yaw, rrate, prate, yrate] to follow.
@@ -258,6 +268,7 @@ class MPCController(BaseController):
 
         rpy_rate = W1(next_eul_ang) @ next_deul_ang  # convert euler angle rate to body frame
         action = np.concatenate([next_pos, next_vel, acc, [next_eul_ang[2]], rpy_rate.flatten()])
+        self.tick = (self.tick + 1) % self.cycles_to_update
         return action.flatten()
 
     def updateTargetTrajectory(self, t_now):
