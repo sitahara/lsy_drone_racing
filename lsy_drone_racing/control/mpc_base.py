@@ -25,7 +25,7 @@ class MPCController(BaseController):
         super().__init__(initial_obs, initial_info)
         self._tick = 0
         self.t_step = 1 / initial_info["env_freq"]  # Time step
-        self.n_horizon = 20  # Prediction horizon
+        self.n_horizon = 40  # Prediction horizon
         # Define the system parameters
         self.mass = initial_info["drone_mass"]  # kg
         self.g = 9.81  # m/s^2
@@ -92,18 +92,18 @@ class MPCController(BaseController):
 
         # Define variables and expressions needed for the objective function
         pos_des = self.model.set_variable(var_type="_tvp", var_name="pos_des", shape=(3, 1))
-        pos_err = pos - pos_des
+        # pos_err = (pos - pos_des)
 
         # Stage cost (Lagrange term): position error and euler angle velocity is penalized
         self.model.set_expression(
             "state_cost_l",
-            pos_err.T @ ca.diag([1, 1, 1]) @ pos_err
+            (pos - pos_des).T @ ca.diag([1, 1, 1]) @ (pos - pos_des)
             + deul_ang.T @ ca.diag([0.01, 0.01, 0.01]) @ deul_ang,
         )
         # Terminal cost (Mayer term): position error and euler angle velocity is penalized
         self.model.set_expression(
             "state_cost_m",
-            pos_err.T @ ca.diag([1, 1, 1]) @ pos_err
+            (pos - pos_des).T @ ca.diag([1, 1, 1]) @ (pos - pos_des)
             + deul_ang.T @ ca.diag([0.01, 0.01, 0.01]) @ deul_ang,
         )
         # Setup the model (hereafter, the expressions and variables are fixed)
@@ -138,19 +138,19 @@ class MPCController(BaseController):
         rpm_max = (4070.3 + 0.2685 * 65535) ** 2  # upper bound for rotor rates
 
         # thrust
-        thrust_lb = 0.4 * self.mass * self.g  # lower bound for thrust to avoid tumbling
+        thrust_lb = 0.3 * self.mass * self.g  # lower bound for thrust to avoid tumbling
         thrust_ub = self.ct * 4 * rpm_max  # upper bound for thrust
         self.mpc.scaling["_u", "thrust"] = thrust_ub - thrust_lb
         self.mpc.bounds["lower", "_u", "thrust"] = thrust_lb
         self.mpc.bounds["upper", "_u", "thrust"] = thrust_ub
 
-        # torques (note: removed factor two from the torque constraints)
-        torque_xy_lb = -self.c_tau_xy * (
-            rpm_max - rpm_min
+        # torques (note: not-removed factor two from the torque constraints)
+        torque_xy_lb = (
+            -self.c_tau_xy * 2 * (rpm_max - rpm_min)
         )  # lower bound for torque in x and y direction
-        torque_xy_ub = self.c_tau_xy * (rpm_max - rpm_min)
-        torque_z_lb = -self.cd * (rpm_max - rpm_min)  # lower bound for torque in z direction
-        torque_z_ub = self.cd * (rpm_max - rpm_min)
+        torque_xy_ub = self.c_tau_xy * 2 * (rpm_max - rpm_min)
+        torque_z_lb = -self.cd * 2 * (rpm_max - rpm_min)  # lower bound for torque in z direction
+        torque_z_ub = self.cd * 2 * (rpm_max - rpm_min)
         # Note that the bounds needs to be optimized so that the interdependency of the torques and thrust is considered
         self.mpc.scaling["_u", "torques"] = np.array(
             [torque_xy_ub - torque_xy_lb, torque_xy_ub - torque_xy_lb, torque_z_ub - torque_z_lb]
@@ -183,7 +183,7 @@ class MPCController(BaseController):
         )
         # Note: set_rterm peniallizes the control input changes
         # Note: not influenced by scaling, hence scale manually
-        self.mpc.set_rterm(thrust=0.01, torques=0.01)  # Control regularization
+        self.mpc.set_rterm(thrust=0.1, torques=0.1)  # Control regularization
 
         # Set the initial guess for the control variables
         initial_control = np.array([0, 0.0, 0.0, 0.0])  # Example: [thrust, tau_x, tau_y, tau_z]
@@ -283,7 +283,7 @@ class MPCController(BaseController):
 
         return tvp_template
 
-    def set_target_trajectory(self, t_total=9):
+    def set_target_trajectory(self, t_total=8):
         """Set the target trajectory for the MPC controller."""
         waypoints = np.array(
             [
