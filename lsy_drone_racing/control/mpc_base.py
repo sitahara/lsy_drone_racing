@@ -8,12 +8,11 @@ from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
 
 from lsy_drone_racing.control import BaseController
-from lsy_drone_racing.control.mpc_utils import (
+from lsy_drone_racing.control.utils import (
     W1,
-    R_body_to_inertial_symb,
-    W1_symb,
+    W2,
+    R_body_to_inertial,
     W2_dot_symb,
-    W2_symb,
     rpm_to_torques_mat,
 )
 
@@ -75,23 +74,21 @@ class MPCController(BaseController):
         # Note: thrust = ct * np.sum(rpm)
 
         # Define Expressions for the dynamics
-        w = self.model.set_expression(
-            "dang_body", W1_symb(eul_ang) @ deul_ang
-        )  # Body Angular velocity
+        w = self.model.set_expression("dang_body", W1(eul_ang) @ deul_ang)  # Body Angular velocity
 
         # Define Dynamics in world frame as euler angles
         self.model.set_rhs("pos", vel)  # dpos = vel
         self.model.set_rhs(
             "vel",
             ca.vertcat(0, 0, -self.g)
-            + R_body_to_inertial_symb(eul_ang) @ ca.vertcat(0, 0, thrust / self.mass),
+            + R_body_to_inertial(eul_ang) @ ca.vertcat(0, 0, thrust / self.mass),
         )
 
         self.model.set_rhs("eul_ang", deul_ang)  # deul_ang = deul_ang
         self.model.set_rhs(
             "deul_ang",
             W2_dot_symb(eul_ang, deul_ang) @ w
-            + W2_symb(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
+            + W2(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
         )
 
         # Define variables and expressions needed for the objective function
@@ -121,14 +118,14 @@ class MPCController(BaseController):
             "n_robust": 0,
             "t_step": self.t_step,
             "state_discretization": "collocation",
-            "collocation_type": "radau",
+            "collocation_type": "legendre",
             "collocation_deg": 3,  # TODO optimize the degree of the collocation
             "collocation_ni": 2,  # TODO optimize the number of the collocation
             "store_full_solution": True,
             # "open_loop": False,
             "nlpsol_opts": {
                 # "ipopt.linear_solver": "ma27", # TODO get ma27 solver
-                "ipopt.max_iter": 10,  # TODO optimize
+                "ipopt.max_iter": 2,  # TODO optimize
                 "ipopt.tol": 1e-5,  # TODO optimize
                 "ipopt.print_level": 0,  # Suppress IPOPT output
                 "print_time": 0,  # Suppress IPOPT timing output
@@ -233,7 +230,7 @@ class MPCController(BaseController):
         # Update MPC controls and data. Only executed every self.cycles_to_update calls
         if self.tick == 0:
             # Note: initial guess is automatically updated with last solution
-            u = self.mpc.make_step(current_state)
+            u = self.mpc.make_step(current_state)  # noqa: F841
 
         print("current time:", self.mpc.t0)
         # Plotting the predicted states of prediction horizon for debuging
