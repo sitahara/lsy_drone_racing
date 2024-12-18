@@ -49,7 +49,7 @@ def R_body_to_inertial(rpy: Union[np.ndarray, ca.SX]) -> Union[np.ndarray, ca.SX
     return Rm.T  # Transpose the matrix to convert from body to inertial frame
 
 
-def Rbi(rpy: ca.MX) -> ca.MX:
+def Rbi(phi: ca.MX, theta: ca.MX, psi: ca.MX) -> ca.MX:
     """Create a rotation matrix from euler angles.
 
     This represents the extrinsic X-Y-Z (or quivalently the intrinsic Z-Y-X (3-2-1)) euler angle
@@ -63,8 +63,6 @@ def Rbi(rpy: ca.MX) -> ca.MX:
     Returns:
         R: casadi Rotation matrix
     """
-    phi, theta, psi = rpy[0], rpy[1], rpy[2]
-
     rx = ca.blockcat([[1, 0, 0], [0, ca.cos(phi), -ca.sin(phi)], [0, ca.sin(phi), ca.cos(phi)]])
     ry = ca.blockcat(
         [[ca.cos(theta), 0, ca.sin(theta)], [0, 1, 0], [-ca.sin(theta), 0, ca.cos(theta)]]
@@ -125,6 +123,15 @@ def W2_dot_symb(phi: ca.SX, dphi: ca.SX) -> ca.SX:
     return W2(phi) @ ca.skew(dphi)
 
 
+def W2s(phi: ca.MX, theta: ca.MX) -> ca.MX:
+    """Compute the W2 matrix from euler angles."""
+    return ca.vertcat(
+        ca.horzcat(1, ca.sin(phi) * ca.tan(theta), ca.cos(phi) * ca.tan(theta)),
+        ca.horzcat(0, ca.cos(phi), -ca.sin(phi)),
+        ca.horzcat(0, ca.sin(phi) / ca.cos(theta), ca.cos(phi) / ca.cos(theta)),
+    )
+
+
 def W2(eul_ang: Union[np.ndarray, ca.MX]) -> Union[np.ndarray, ca.MX]:
     """Compute the W2 matrix from euler angles."""
     phi, theta = eul_ang[0], eul_ang[1]
@@ -145,14 +152,14 @@ def W2(eul_ang: Union[np.ndarray, ca.MX]) -> Union[np.ndarray, ca.MX]:
     return W2_matrix
 
 
-def rungeKutta4(x, u, dt, f) -> ca.Function:
+def rungeKutta4(x, u, dt, f) -> [ca.MX, ca.Function]:
     """Perform one step of the 4th order Runge-Kutta integration method.
 
     Args:
-        x (ca.SX): The state vector.
-        u (ca.SX): The control input vector.
+        x (ca.MX): The state vector.
+        u (ca.MX): The control input vector.
         dt (float): The time step.
-        f (function): The function to discretize.
+        f (ca.Function): The function to discretize.
 
     Returns:
         ca.Function: The discrete dynamica function.
