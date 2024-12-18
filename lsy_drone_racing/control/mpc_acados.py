@@ -11,10 +11,10 @@ from scipy.interpolate import CubicSpline
 from lsy_drone_racing.control import BaseController
 from lsy_drone_racing.control.utils import (
     W1,
-    W2,
     R_body_to_inertial,
     Rbi,
     W2_dot_symb,
+    W2s,
     rpm_to_torques_mat,
     rungeKutta4,
 )
@@ -239,24 +239,29 @@ class MPCController(BaseController):
                 + R_body_to_inertial(eul_ang) @ ca.vertcat(0, 0, thrust / self.mass),
                 deul_ang,
                 W2_dot_symb(eul_ang, deul_ang) @ w
-                + W2(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
+                + W2s(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
             )
         else:
             model.name = "quadrotor_thrust_mpc"
             # Define state variables and dynamics
             pos = ca.MX.sym("pos", 3)  # position in world frame
             vel = ca.MX.sym("vel", 3)  # velocity in world frame
-            eul_ang = ca.MX.sym("eul_ang", 3)  # euler angles roll, pitch, yaw
+
+            phi = ca.MX.sym("phi")
+            theta = ca.MX.sym("theta")
+            psi = ca.MX.sym("psi")
+            eul_ang = ca.vertcat(phi, theta, psi)  # euler angles roll, pitch, yaw
+            # eul_ang = ca.MX.sym("eul_ang", 3)  # euler angles roll, pitch, yaw
             w = ca.MX.sym("w", 3)  # body angular velocities
 
             model.x = ca.vertcat(pos, vel, eul_ang, w)
-            dx = ca.MX.sym("dx", 12)  # state derivative
+            # dx = ca.MX.sym("dx", 12)  # state derivative
 
             # Define Control variables
-            f1 = ca.MX.sym("f1", 1)  # motor 1 thrust
-            f2 = ca.MX.sym("f2", 1)  # motor 2 thrust
-            f3 = ca.MX.sym("f3", 1)  # motor 3 thrust
-            f4 = ca.MX.sym("f4", 1)  # motor 4 thrust
+            f1 = ca.MX.sym("f1")  # motor 1 thrust
+            f2 = ca.MX.sym("f2")  # motor 2 thrust
+            f3 = ca.MX.sym("f3")  # motor 3 thrust
+            f4 = ca.MX.sym("f4")  # motor 4 thrust
             model.u = ca.vertcat(f1, f2, f3, f4)  # control
 
             eq = 0.25 * self.mass * self.g  # equilibrium control input per motor
@@ -268,13 +273,15 @@ class MPCController(BaseController):
                 self.gamma * (f1 - f2 + f3 - f4),
             )  # torques in the body frame
             # Define Dynamics
+            Rbdin = Rbi(phi, theta, psi)
             dx = ca.vertcat(
                 vel,
                 ca.vertcat(0, 0, -self.g)
-                + Rbi(eul_ang) @ ca.vertcat(0, 0, (f1 + f2 + f3 + f4) / self.mass),
-                W2(eul_ang) @ w,
-                self.J_inv @ (torques - ca.skew(w) @ self.J @ w),
+                + Rbdin @ (ca.vertcat(0, 0, (f1 + f2 + f3 + f4)) / self.mass),
+                W2s(phi, theta) @ w,
+                self.J_inv @ (torques - (ca.skew(w) @ self.J @ w)),
             )
+            # model.xdot = dx
 
         self.cont_dyn = ca.Function("cont_dyn", [model.x, model.u], [dx], ["x", "u"], ["dx"])
         model.f_expl_expr = dx  # continuous-time explicit dynamics
@@ -298,9 +305,9 @@ class MPCController(BaseController):
         ocp = AcadosOcp()
         ocp.model = self.model
         # Set solver options
-        ocp.solver_options.N_horizon = self.n_horizon
-        ocp.solver_options.tf = self.n_horizon * self.t_step
-        ocp.solver_options.integrator_type = "ERK"  # "ERK", "IRK", "GNSF"
+        ocp.solver_options.N_horizon = self.n_horizon  # number of control intervals
+        ocp.solver_options.tf = self.n_horizon * self.t_step  # prediction horizon
+        ocp.solver_options.integrator_type = "ERK"  # "ERK", "IRK", "GNSF", "DISCRETE"
         ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"  # FULL_CONDENSING_QPOASES
         ocp.solver_options.hessian_approx = "GAUSS_NEWTON"  # "EXACT", "GAUSS_NEWTON"
         ocp.solver_options.nlp_solver_type = "SQP"  # SQP, SQP_RTI
