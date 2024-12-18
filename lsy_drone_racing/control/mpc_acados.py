@@ -341,7 +341,7 @@ class MPCController(BaseController):
         rpm_min = 4070.3**2  # lower bound for rotor rates
         rpm_max = (4070.3 + 0.2685 * 65535) ** 2  # upper bound for rotor rates
         thrust_lb = 0.3 * 0.25 * self.mass * self.g  # lower bound for thrust to avoid tumbling
-        thrust_ub = self.ct * rpm_max  # upper bound for thrust as maximum achievable
+        thrust_ub = self.ct * (rpm_max**2)  # upper bound for thrust as maximum achievable
         torque_xy_lb = -self.c_tau_xy * 2 * (rpm_max - rpm_min)
         torque_xy_ub = self.c_tau_xy * 2 * (rpm_max - rpm_min)
         torque_z_lb = -self.cd * 2 * (rpm_max - rpm_min)
