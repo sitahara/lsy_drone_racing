@@ -1,211 +1,108 @@
 """Module for Model Predictive Controller implementation using do_mpc."""
 
 import casadi as ca
-import do_mpc
 import numpy as np
 import pybullet as p
+import scipy as sp
 from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
+from scipy.spatial.transform import Rotation as Rmat
 
 from lsy_drone_racing.control import BaseController
 from lsy_drone_racing.control.utils import (
     W1,
     W2,
-    R_body_to_inertial,
-    W2_dot_symb,
+    Rbi,
+    W1s,
+    W2s,
+    dW1s,
+    dW2s,
     rpm_to_torques_mat,
+    rungeKutta4,
 )
 
 
-class MPCController(BaseController):
+class MPC_BASE(BaseController):
     """Model Predictive Controller implementation using do_mpc."""
 
     def __init__(self, initial_obs: NDArray[np.floating], initial_info: dict):  # noqa: D107
         super().__init__(initial_obs, initial_info)
-        self._tick = 0
-        self.t_step = 1 / initial_info["env_freq"]  # Time step
-        self.n_horizon = 40  # Prediction horizon
+
+        # Inital parameters
+        self.useMellinger = True  # whether to use the thrust or Mellinger interface
+        self.useTorqueModel = (
+            False  # whether to use the total thrust & torque or individual thrust model
+        )
+        self.useEulerDynamics = True  # whether to use euler or quaternion dynamics
+        self.ts = 1 / 60  # Time step, 60Hz
+        self.n_step = 0  # current step for the target trajectory
+        self.n_horizon = 60  # Prediction horizon, 1s
+        self.nx = 12  # number of states
+        self.nu = 4  # number of control inputs
+        self.ny = self.nx + self.nu  # number of
+        # Constraint parameters
+        self.soft_constraints = False  # whether to use soft constraints
+        self.soft_penalty = 1e3  # penalty for soft constraints
+        # Cost parameters
+        self.Qs = np.diag(
+            [1, 1, 1, 0, 0, 0, 0, 0, 0, 0.01, 0.01, 0.01]
+        )  # stage cost for states (position, velocity, euler angles, angular velocity)
+        self.Qt = self.Qs  # terminal cost
+        self.Rs = np.diag([0.01, 0.01, 0.01, 0.01])  # control cost
+        self.Rsdelta = np.diag([0.01, 0.01, 0.01, 0.01])  # control rate cost
+        # MPC parameters
         self.tick = 0  # running tick that indicates when optimization problem should be reexecuted
         self.cycles_to_update = (
             3  # after how many control calls the optimization problem is reexecuted
         )
-        # Define the system parameters
+        # Define the (nominal) system parameters
         self.mass = initial_info["drone_mass"]  # kg
-        self.g = 9.81  # m/s^2
-        self.ct = 3.1582e-10  # N/RPM^2, lift coefficient
-        self.cd = 7.9379e-12  # N/RPM^2, drag coefficient
-        arm_length = 0.046  # m, arm length
-        self.c_tau_xy = arm_length * self.ct / np.sqrt(2)  # torque coefficient
+        self.g = 9.81
+        # Ixx, Iyy, Izz = drone.nominal_params.J.diagonal()  # kg*m^2
+        Ixx = 1.395e-5  # kg*m^2, moment of inertia
+        Iyy = 1.436e-5  # kg*m^2, moment of inertia
+        Izz = 2.173e-5  # kg*m^2, moment of inertia
 
+        self.J = ca.diag([Ixx, Iyy, Izz])  # moment of inertia
+        self.J_inv = ca.diag([1.0 / Ixx, 1.0 / Iyy, 1.0 / Izz])  # inverse of moment of inertia
+
+        self.ct = 3.1582e-10  # N/RPM^2, lift coefficient drone.nominal_params.kf  #
+        self.cd = 7.9379e-12  # N/RPM^2, drag coefficient drone.nominal_params.km  #
+        self.gamma = self.cd / self.ct
+
+        self.arm_length = 0.046  # m, arm length drone.nominal_params.arm_len  #
+        self.c_tau_xy = self.arm_length * self.ct / ca.sqrt(2)  # torque coefficient
         self.rpmToTorqueMat = rpm_to_torques_mat(self.c_tau_xy, self.cd)  # Torque matrix
 
-        self.J = np.diag(
-            [1.395e-5, 1.436e-5, 2.173e-5]
-        )  # kg*m^2 , diag(I_xx,I_yy,I_zz), moment of inertia
-        self.J_inv = np.linalg.inv(self.J)  # inverse of moment of inertia
+        rpm_lb = 4070.3
+        rpm_ub = 4070.3 + 0.2685 * 65535
+        self.thrust_lb = self.ct * rpm_lb**2
+        self.thrust_ub = self.ct * rpm_ub**2
 
-        # Initialize the MPC model
-        self.model = do_mpc.model.Model("continuous")
+        self.x = None  # symbolical state vector (casadi used for dynamics)
+        self.u = None  # symbolical control input vector (casadi used for dynamics)
+        self.dx = None  # Continuous dynamics expression (casadi)
+        self.dx_d = None  # Discrete dynamics expression (casadi)
+        self.fc = None  # CasADi function for the dynamics: dx = f(x, u)
+        self.fd = None  # Discrete CasADi function for the dynamics: x_{k+1} = f(x_k, u_k)
+        self.f_impl = None  # Implicit dynamics: 0 = x_dot - f(x, u)
+        self.modelName = None  # Model name (AcadosModel, Code generation)
+        self.x_guess = None  # holds the last solution for the state trajectory (already shifted)
+        self.u_guess = None  # holds the last solution for the controls trajectory (already shifted)
+        self.x_ref = np.zeros(
+            (self.nx, self.n_horizon + 1)
+        )  # reference trajectory (from current time to horizon)
 
-        # Define state variables
-        pos = self.model.set_variable(
-            var_type="_x", var_name="pos", shape=(3, 1)
-        )  # x, y, z, linear position
-        vel = self.model.set_variable(
-            var_type="_x", var_name="vel", shape=(3, 1)
-        )  # dx, dy, dz, linear velocity
-        eul_ang = self.model.set_variable(
-            var_type="_x", var_name="eul_ang", shape=(3, 1)
-        )  # euler angles roll, pitch, yaw
-        deul_ang = self.model.set_variable(
-            var_type="_x", var_name="deul_ang", shape=(3, 1)
-        )  # droll, dpitch, dyaw in eul_ang
-
-        # Define Control variables
-        # Note: The control variables are the collective thrust and body torques [thrust, tau_x, tau_y, tau_z].
-        thrust = self.model.set_variable(
-            var_type="_u", var_name="thrust", shape=(1, 1)
-        )  # torque of each rotor
-        torques = self.model.set_variable(
-            var_type="_u", var_name="torques", shape=(3, 1)
-        )  # torque of each rotor
-
-        # Note: torques = rpm_to_torques_mat @ rpm
-        # Note: thrust = ct * np.sum(rpm)
-
-        # Define Expressions for the dynamics
-        w = self.model.set_expression("dang_body", W1(eul_ang) @ deul_ang)  # Body Angular velocity
-
-        # Define Dynamics in world frame as euler angles
-        self.model.set_rhs("pos", vel)  # dpos = vel
-        self.model.set_rhs(
-            "vel",
-            ca.vertcat(0, 0, -self.g)
-            + R_body_to_inertial(eul_ang) @ ca.vertcat(0, 0, thrust / self.mass),
+        self.x0 = np.concatenate(
+            [initial_obs["pos"], initial_obs["vel"], initial_obs["rpy"], initial_obs["ang_vel"]]
         )
-
-        self.model.set_rhs("eul_ang", deul_ang)  # deul_ang = deul_ang
-        self.model.set_rhs(
-            "deul_ang",
-            W2_dot_symb(eul_ang, deul_ang) @ w
-            + W2(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
-        )
-
-        # Define variables and expressions needed for the objective function
-        pos_des = self.model.set_variable(var_type="_tvp", var_name="pos_des", shape=(3, 1))
-        # pos_err = (pos - pos_des)
-
-        # Stage cost (Lagrange term): position error and euler angle velocity is penalized
-        self.model.set_expression(
-            "state_cost_l",
-            (pos - pos_des).T @ ca.diag([1, 1, 1]) @ (pos - pos_des)
-            + deul_ang.T @ ca.diag([0.01, 0.01, 0.01]) @ deul_ang,
-        )
-        # Terminal cost (Mayer term): position error and euler angle velocity is penalized
-        self.model.set_expression(
-            "state_cost_m",
-            (pos - pos_des).T @ ca.diag([1, 1, 1]) @ (pos - pos_des)
-            + deul_ang.T @ ca.diag([0.01, 0.01, 0.01]) @ deul_ang,
-        )
-        # Setup the model (hereafter, the expressions and variables are fixed)
-        self.model.setup()
-
-        # Initialize the MPC controller
-        self.mpc = do_mpc.controller.MPC(self.model)
-        # Set MPC parameters
-        setup_mpc = {
-            "n_horizon": self.n_horizon,
-            "n_robust": 0,
-            "t_step": self.t_step,
-            "state_discretization": "collocation",
-            "collocation_type": "legendre",
-            "collocation_deg": 3,  # TODO optimize the degree of the collocation
-            "collocation_ni": 2,  # TODO optimize the number of the collocation
-            "store_full_solution": True,
-            # "open_loop": False,
-            "nlpsol_opts": {
-                # "ipopt.linear_solver": "ma27", # TODO get ma27 solver
-                "ipopt.max_iter": 2,  # TODO optimize
-                "ipopt.tol": 1e-5,  # TODO optimize
-                "ipopt.print_level": 0,  # Suppress IPOPT output
-                "print_time": 0,  # Suppress IPOPT timing output
-            },
-        }
-        self.mpc.set_param(**setup_mpc)
-
-        # Define the constraints and scaling ######################
-
-        # Rotor rates, these are the base of the control constraints
-        rpm_min = 4070.3**2  # lower bound for rotor rates
-        rpm_max = (4070.3 + 0.2685 * 65535) ** 2  # upper bound for rotor rates
-
-        # total thrust
-        thrust_lb = 0.3 * self.mass * self.g  # lower bound for thrust to avoid tumbling
-        thrust_ub = self.ct * 4 * rpm_max  # upper bound for thrust as maximum achievable
-        self.mpc.scaling["_u", "thrust"] = thrust_ub - thrust_lb
-        self.mpc.bounds["lower", "_u", "thrust"] = thrust_lb
-        self.mpc.bounds["upper", "_u", "thrust"] = thrust_ub
-
-        # torques (note: not-removed factor two from the torque constraints)
-        torque_xy_lb = (
-            -self.c_tau_xy * 2 * (rpm_max - rpm_min)
-        )  # lower bound for torque in x and y direction
-        torque_xy_ub = self.c_tau_xy * 2 * (rpm_max - rpm_min)
-        torque_z_lb = -self.cd * 2 * (rpm_max - rpm_min)  # lower bound for torque in z direction
-        torque_z_ub = self.cd * 2 * (rpm_max - rpm_min)
-        # Note that the bounds needs to be optimized so that the interdependency of the torques and thrust is considered
-        self.mpc.scaling["_u", "torques"] = np.array(
-            [torque_xy_ub - torque_xy_lb, torque_xy_ub - torque_xy_lb, torque_z_ub - torque_z_lb]
-        ).T
-        self.mpc.bounds["lower", "_u", "torques"] = np.array(
-            [torque_xy_lb, torque_xy_lb, torque_z_lb]
-        ).T
-        self.mpc.bounds["upper", "_u", "torques"] = np.array(
-            [torque_xy_ub, torque_xy_ub, torque_z_ub]
-        ).T
-        # States
-        x_y_max = 2
-        z_max = 2
-        self.mpc.scaling["_x", "pos"] = np.array([2 * x_y_max, 2 * x_y_max, z_max]).T
-        self.mpc.bounds["lower", "_x", "pos"] = np.array([-x_y_max, -x_y_max, 0.1]).T
-        self.mpc.bounds["upper", "_x", "pos"] = np.array([x_y_max, x_y_max, z_max]).T
-
-        vel_scale = 10
-        self.mpc.scaling["_x", "vel"] = vel_scale
-
-        eul_ang_scale = np.pi
-        self.mpc.scaling["_x", "eul_ang"] = eul_ang_scale
-
-        deul_ang_scale = 10
-        self.mpc.scaling["_x", "deul_ang"] = deul_ang_scale
-
-        # Define the objective function
-        self.mpc.set_objective(
-            mterm=self.model.aux["state_cost_m"], lterm=self.model.aux["state_cost_l"]
-        )
-        # Note: set_rterm peniallizes the control input changes
-        # Note: not influenced by scaling, hence scale manually
-        self.mpc.set_rterm(thrust=0.1, torques=0.1)  # Control regularization
-
-        # Set the initial guess for the control variables
-        initial_control = np.array([0, 0.0, 0.0, 0.0])  # Example: [thrust, tau_x, tau_y, tau_z]
-        self.mpc.u0 = initial_control
-
-        # Set the target trajectory
-        self.set_target_trajectory()
-        self.mpc.set_tvp_fun(self.updateTargetTrajectory)
-
-        # Setup the MPC
-        self.mpc.setup()
-        # Set the initial guess for the state variables
-        self.mpc.x0["pos"] = initial_obs["pos"]
-        self.mpc.x0["vel"] = initial_obs["vel"]
-        self.mpc.x0["eul_ang"] = initial_obs["rpy"]
-        self.mpc.x0["deul_ang"] = initial_obs["ang_vel"]
-
-        print("initial_obs: ", self.mpc.x0["pos"])
-
-        self.mpc.set_initial_guess()
+        if not self.useTorqueModel:
+            w0 = (
+                W1(initial_obs["rpy"]) @ initial_obs["ang_vel"]
+            )  # convert euler angle rate to body frame
+            self.x0 = np.concatenate(
+                [initial_obs["pos"], initial_obs["vel"], initial_obs["rpy"], w0]
+            )
 
     def compute_control(
         self, obs: NDArray[np.floating], info: dict | None = None
@@ -268,31 +165,255 @@ class MPCController(BaseController):
         self.tick = (self.tick + 1) % self.cycles_to_update
         return action.flatten()
 
-    def updateTargetTrajectory(self, t_now):
-        """Time-varying parameter function to update pos_des."""
-        # print("t_now: ", t_now)
-        tvp_template = self.mpc.get_tvp_template()
-        for k in range(self.n_horizon + 1):
-            t_now_k = min((t_now + (k + 1) * self.t_step), self.t_total)
-            # print("t_now_k: ", t_now_k)
-            tvp_template["_tvp", k, "pos_des"] = self.target_trajectory(t_now_k)
-            # Plot the spline as a line in PyBullet
-            # if k < self.n_horizon:
-            #     start_point = self.target_trajectory(t_now_k)
-            #     end_point = self.target_trajectory(t_now_k + 1)
-            #     p.addUserDebugLine(
-            #         start_point.flatten(),
-            #         end_point.flatten(),
-            #         lineColorRGB=[0, 0, 1],  # Blue color
-            #         lineWidth=2,
-            #         lifeTime=self.t_step * 2,  # 0 means the line persists indefinitely
-            #         physicsClientId=0,
-            #     )
+    def setupIPOPTOptimizer(self):
+        """Setup the IPOPT optimizer for the MPC controller."""
+        opti = ca.Opti()
 
-        return tvp_template
+        # Define optimization variables
+        X = opti.variable(self.nx, self.n_horizon + 1)  # State trajectory
+        U = opti.variable(self.nu, self.n_horizon)  # Control trajectory
+        X_ref = opti.parameter(self.nx, self.n_horizon + 1)  # Reference trajectory
+        X0 = opti.parameter(self.nx)  # Initial state
+        # Initial state constraint
+        opti.subject_to(X[:, 0] == X0)
 
-    def set_target_trajectory(self, t_total=8):
+        # Dynamics constraints
+        for k in range(self.n_horizon):
+            x_next = X[:, k] + self.fd(X[:, k], U[:, k])
+            opti.subject_to(X[:, k + 1] == x_next)
+
+        # Cost function
+
+        cost = 0
+        for k in range(self.n_horizon):
+            cost += ca.mtimes(
+                [(X[:, k] - X_ref[:, k]).T, self.Qs, (X[:, k] - X_ref[:, k])]
+            )  # State cost
+            cost += ca.mtimes(
+                [(U[:, k] - self.u_eq).T, self.Rs, (U[:, k] - self.u_eq)]
+            )  # Control cost
+        cost += ca.mtimes(
+            [
+                (X[:, self.n_horizon] - X_ref[:, -1]).T,
+                self.Qt,
+                (X[:, self.n_horizon] - X_ref[:, -1]),
+            ]
+        )  # Terminal cost
+        opti.minimize(cost)
+
+        # Control constraints
+        opti.subject_to(opti.bounded(self.u_lb, U, self.u_ub))
+        opti.subject_to(opti.bounded(self.x_lb, X, self.x_ub))
+
+        # Solver options
+        opts = {
+            "ipopt.print_level": 0,
+            "ipopt.tol": 1e-4,
+            "ipopt.max_iter": 25,
+            "ipopt.linear_solver": "mumps",
+        }
+        opti.solver("ipopt", opts)
+
+        # Store the optimizer
+        self.IPOPT_var = {"opti": opti, "X0": X0, "X_ref": X_ref, "X": X, "U": U, "cost": cost}
+        return None
+
+    def stepIPOPT(self) -> np.ndarray:
+        """Perfroms one optimization step using the IPOPT solver. Also works without warmstart. Used as first step for the acados model. Returns action and updates/instantiates guess for next iteration."""
+        # Unpack IPOPT variables
+        opti = self.IPOPT_var["opti"]
+        X = self.IPOPT_var["X"]
+        U = self.IPOPT_var["U"]
+        X_ref = self.IPOPT_var["X_ref"]
+        X0 = self.IPOPT_var["X0"]
+        cost = self.IPOPT_var["cost"]
+
+        # Set initial state
+        opti.set_value(X0, self.current_state)
+
+        # Set reference trajectory
+        opti.set_value(X_ref, self.x_ref)
+        if self.x_guess is None:
+            opti.set_initial(X, np.hstack((self.current_state, self.x_ref[:, 1:])))
+        else:
+            opti.set_initial(X, np.hstack((self.current_state, self.x_guess)))
+
+        # Solve the optimization problem
+        sol = opti.solve()
+
+        # Extract the solution
+        x_sol = opti.value(X)
+        u_sol = opti.value(U)
+        if self.useMellinger:
+            action = x_sol[:, 1]
+        else:
+            action = u_sol[:, 0]
+        self.last_action = action
+
+        # Update/Instantiate guess for next iteration
+        self.x_guess = np.hstack((x_sol[:, 2:], x_sol[:, -1]))
+        self.u_guess = np.hstack((u_sol[:, 1:], u_sol[:, -1]))
+
+        self.x_last = x_sol
+        self.u_last = u_sol
+        # reset the solver after the initial guess
+        self.setupIPOPTOptimizer()
+        return action
+        # Debugging
+        # debug_x = np.zeros((self.nx, self.n_horizon + 1))
+        # debug_x[:, 0] = current_state
+        # for k in range(self.n_horizon):
+        #     debug_x[:, k + 1] = (
+        #         self.disc_dyn(self.x_guess[:, k], self.u_guess[:, k]).full().flatten()
+        #     )
+        # print("Initial guess", debug_x[0:3, :20])
+        # try:
+        #     # Plot the spline as a line in PyBullet
+        #     for k in range(self.n_horizon):
+        #         p.addUserDebugLine(
+        #             debug_x[:3, k],
+        #             debug_x[:3, k + 1],
+        #             lineColorRGB=[k, 0, 1],  # Red color
+        #             lineWidth=2,
+        #             lifeTime=0,  # 0 means the line persists indefinitely
+        #             physicsClientId=0,
+        #         )
+        # except p.error:
+        #     ...  # Ignore errors if PyBullet is not available
+        return None
+
+    def setupDynamics(self):
+        """Setup the dynamics for the MPC controller."""
+        if self.useTorqueModel:
+            if self.useEulerDynamics:
+                self.TorqueEulerDynamics()  # Uses euler angle rates
+            if not self.useEulerDynamics:
+                raise NotImplementedError
+                self.TorqueQuaternionDynamics()  # Not implemented yet
+        elif not self.useTorqueModel:
+            if self.useEulerDynamics:
+                self.ThrustEulerDynamics()  # Uses body angular velocity
+            if not self.useEulerDynamics:
+                raise NotImplementedError
+                self.ThrustQuaternionDynamics()  # Not implemented yet
+        # Continuous dynamic function
+        self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "u"], ["dx"])
+        # Discrete dynamic expression and dynamic function
+        self.dx_d, self.fd = rungeKutta4(self.x, self.u, self.ts, self.fc)
+        xdot = ca.MX.sym("xdot", self.nx)
+        # Continuous implicit dynamic expression
+        self.f_impl = xdot - self.dx
+        return None
+
+    def TorqueEulerDynamics(self):
+        """Setup the dynamics model using the torque model."""
+        # Define state variables
+        pos = ca.MX.sym("pos", 3)  # position in world frame
+        vel = ca.MX.sym("vel", 3)  # velocity in world frame
+        eul_ang = ca.MX.sym("eul_ang", 3)  # euler angles roll, pitch, yaw
+        deul_ang = ca.MX.sym("deul_ang", 3)  # euler angle rates in world frame
+
+        # Define Control variables
+        thrust = ca.MX.sym("thrust", 1)  # total thrust
+        torques = ca.MX.sym("torques", 3)  # body frame torques
+        self.u_eq = np.array([self.mass * self.g, 0, 0, 0]).T  # equilibrium control input
+
+        # Define Dynamics in world frame as euler angles
+        w = W1s(eul_ang) @ deul_ang  # Body angular velocity
+
+        dx = ca.vertcat(
+            vel,
+            ca.vertcat(0, 0, -self.g)
+            + Rbi(eul_ang[0], eul_ang[1], eul_ang[2]) @ ca.vertcat(0, 0, thrust / self.mass),
+            deul_ang,
+            dW2s(eul_ang, deul_ang) @ w
+            + W2s(eul_ang) @ (self.J_inv @ (ca.cross(self.J @ w, w) + torques)),
+        )
+        self.x = ca.vertcat(pos, vel, eul_ang, deul_ang)  # state vector
+        self.dx = dx
+        self.u = ca.vertcat(thrust, torques)  # control input vector
+        self.modelName = "MPCTorqueEuler"
+        return None
+
+    def ThrustEulerDynamics(self):
+        """Setup the dynamics model using the thrust model."""
+        # Define state variables
+        pos = ca.MX.sym("pos", 3)
+        vel = ca.MX.sym("vel", 3)
+        eul_ang = ca.MX.sym("eul_ang", 3)
+        w = ca.MX.sym("w", 3)
+
+        # Define Control variables
+        u = ca.MX.sym("f", 4)  # thrust of each rotor
+        eq = 0.25 * self.mass * self.g  # equilibrium control input per motor
+        self.u_eq = np.array([eq, eq, eq, eq]).T  # equilibrium control input, drone hovers
+        beta = self.arm_length / ca.sqrt(2.0)  # beta = l/sqrt(2)
+        torques = ca.vertcat(
+            beta * (u[0] + u[1] - u[2] - u[3]),
+            beta * (-u[0] + u[1] + u[2] - u[3]),
+            self.gamma * (u[0] - u[1] + u[2] - u[3]),
+        )  # torques in the body frame
+
+        dx = ca.vertcat(
+            vel,
+            ca.vertcat(0, 0, -self.g)
+            + Rbi(eul_ang[0], eul_ang[1], eul_ang[2]) @ ca.vertcat(0, 0, ca.sum(u) / self.mass),
+            W2s(eul_ang) @ w,
+            self.J_inv @ (torques - (ca.skew(w) @ self.J @ w)),
+        )
+        self.x = ca.vertcat(pos, vel, eul_ang, w)  # state vector
+        self.dx = dx
+        self.u = u
+        self.modelName = "MPCThrustEuler"
+
+        # Setup base constraints and scaling factors
+        self.u_lb = np.array([self.thrust_lb, self.thrust_lb, self.thrust_lb, self.thrust_lb]).T
+        self.u_ub = np.array([self.thrust_ub, self.thrust_ub, self.thrust_ub, self.thrust_ub]).T
+        self.u_scal = self.u_ub - self.u_lb
+
+        x_y_max = 3.0
+        z_max = 2.5
+        z_min = 0.00
+        eul_ang_max = 85 / 180 * np.pi
+        large_val = 1e6
+        self.x_lb = np.array(
+            [
+                -x_y_max,
+                -x_y_max,
+                z_min,
+                -large_val,
+                -large_val,
+                -large_val,
+                -eul_ang_max,
+                -eul_ang_max,
+                -eul_ang_max,
+                -large_val,
+                -large_val,
+                -large_val,
+            ]
+        ).T
+        self.x_ub = np.array(
+            [
+                x_y_max,
+                x_y_max,
+                z_max,
+                large_val,
+                large_val,
+                large_val,
+                eul_ang_max,
+                eul_ang_max,
+                eul_ang_max,
+                large_val,
+                large_val,
+                large_val,
+            ]
+        ).T
+        self.x_scal = self.x_ub - self.x_lb
+        return None
+
+    def set_target_trajectory(self, t_total: float = 11) -> None:
         """Set the target trajectory for the MPC controller."""
+        self.n_step = 0  # current step for the target trajectory
         waypoints = np.array(
             [
                 [1.0, 1.0, 0.0],
@@ -310,8 +431,8 @@ class MPCController(BaseController):
         self.t_total = t_total
         t = np.linspace(0, self.t_total, len(waypoints))
         self.target_trajectory = CubicSpline(t, waypoints)
-
         # Generate points along the spline for visualization
+
         t_vis = np.linspace(0, self.t_total - 1, 100)
         spline_points = self.target_trajectory(t_vis)
         try:
@@ -327,4 +448,24 @@ class MPCController(BaseController):
                 )
         except p.error:
             ...  # Ignore errors if PyBullet is not available
+        return None
+
+    def updateTargetTrajectory(self):
+        """Update the target trajectory for the MPC controller."""
+        current_time = self.n_step * self.ts
+        t_horizon = np.linspace(
+            current_time, current_time + self.n_horizon * self.ts, self.n_horizon + 1
+        )
+
+        # Evaluate the spline at the time points
+        pos_des = self.target_trajectory(t_horizon)
+
+        # Handle the case where the end time exceeds the total time
+        if t_horizon[-1] > self.t_total:
+            last_value = self.target_trajectory(self.t_total).reshape(3, 1)
+            n_repeat = np.sum(t_horizon > self.t_total)
+            pos_des[:, -n_repeat] = np.tile(last_value, (1, n_repeat))
+        # print(reference_trajectory_horizon)
+        self.x_ref[:3, :] = pos_des
+        self.n_step += 1
         return None
