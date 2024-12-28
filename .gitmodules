@@ -1,0 +1,6 @@
+[submodule "external/acados"]
+	path = external/acados
+	url = https://github.com/acados/acados.git
+[submodule "external/L4acados"]
+	path = external/L4acados
+	url = https://github.com/IntelligentControlSystems/l4acados.git

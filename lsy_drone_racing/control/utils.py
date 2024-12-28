@@ -98,75 +98,84 @@ def rpm_to_torques_mat(c_tau_xy: float, cd: float) -> np.ndarray:
     )
 
 
-def W1(eul_ang: Union[np.ndarray, ca.SX]) -> Union[np.ndarray, ca.SX]:
-    """Compute the W1 matrix from euler angles using casadi symbolic."""
+def W1(eul_ang: np.ndarray) -> np.ndarray:
+    """Compute the numpy W1 matrix from euler angles."""
     phi, theta = eul_ang[0], eul_ang[1]
-    if isinstance(eul_ang, np.ndarray):
-        W1_matrix = np.array(
-            [
-                [1, 0, -np.sin(theta)],
-                [0, np.cos(phi), np.sin(phi) * np.cos(theta)],
-                [0, -np.sin(phi), np.cos(phi) * np.cos(theta)],
-            ]
-        )
-    else:
-        W1_matrix = ca.vertcat(
-            ca.horzcat(1, 0, -ca.sin(theta)),
-            ca.horzcat(0, ca.cos(phi), ca.sin(phi) * ca.cos(theta)),
-            ca.horzcat(0, -ca.sin(phi), ca.cos(phi) * ca.cos(theta)),
-        )
-    return W1_matrix
-
-
-def W2_dot_symb(phi: ca.SX, dphi: ca.SX) -> ca.SX:
-    """Compute the time derivative of the W2 matrix."""
-    return W2(phi) @ ca.skew(dphi)
-
-
-def W2s(phi: ca.MX, theta: ca.MX) -> ca.MX:
-    """Compute the W2 matrix from euler angles."""
-    return ca.vertcat(
-        ca.horzcat(1, ca.sin(phi) * ca.tan(theta), ca.cos(phi) * ca.tan(theta)),
-        ca.horzcat(0, ca.cos(phi), -ca.sin(phi)),
-        ca.horzcat(0, ca.sin(phi) / ca.cos(theta), ca.cos(phi) / ca.cos(theta)),
+    return np.array(
+        [
+            [1, 0, -np.sin(theta)],
+            [0, np.cos(phi), np.sin(phi) * np.cos(theta)],
+            [0, -np.sin(phi), np.cos(phi) * np.cos(theta)],
+        ]
     )
 
 
-def W2(eul_ang: Union[np.ndarray, ca.MX]) -> Union[np.ndarray, ca.MX]:
+def W2(eul_ang: np.ndarray) -> np.ndarray:
     """Compute the W2 matrix from euler angles."""
     phi, theta = eul_ang[0], eul_ang[1]
-    if isinstance(phi, float):
-        W2_matrix = np.array(
-            [
-                [1, np.sin(phi) * np.tan(theta), np.cos(phi) * np.tan(theta)],
-                [0, np.cos(phi), -np.sin(phi)],
-                [0, np.sin(phi) / np.cos(theta), np.cos(phi) / np.cos(theta)],
-            ]
-        )
-    else:
-        W2_matrix = ca.vertcat(
-            ca.horzcat(1, ca.sin(phi) * ca.tan(theta), ca.cos(phi) * ca.tan(theta)),
-            ca.horzcat(0, ca.cos(phi), -ca.sin(phi)),
-            ca.horzcat(0, ca.sin(phi) / ca.cos(theta), ca.cos(phi) / ca.cos(theta)),
-        )
-    return W2_matrix
+    return np.array(
+        [
+            [1, np.sin(phi) * np.tan(theta), np.cos(phi) * np.tan(theta)],
+            [0, np.cos(phi), -np.sin(phi)],
+            [0, np.sin(phi) / np.cos(theta), np.cos(phi) / np.cos(theta)],
+        ]
+    )
 
 
-def rungeKutta4(x, u, dt, f) -> [ca.MX, ca.Function]:
+def W1s(eul_ang: ca.MX) -> ca.MX:
+    """Compute the symbolic W1 matrix from euler angles."""
+    return ca.vertcat(
+        ca.horzcat(1, 0, -ca.sin(eul_ang[1])),
+        ca.horzcat(0, ca.cos(eul_ang[0]), ca.sin(eul_ang[0]) * ca.cos(eul_ang[1])),
+        ca.horzcat(0, -ca.sin(eul_ang[0]), ca.cos(eul_ang[0]) * ca.cos(eul_ang[1])),
+    )
+
+
+def dW1s(eul_ang: ca.MX, deul_ang: ca.MX) -> ca.MX:
+    """Compute the time derivative of the symbolical W1 matrix."""
+    return W1s(eul_ang) @ ca.skew(deul_ang)
+
+
+def W2s(eul_ang: ca.MX) -> ca.MX:
+    """Compute the W2 matrix from euler angles."""
+    return ca.vertcat(
+        ca.horzcat(
+            1, ca.sin(eul_ang[0]) * ca.tan(eul_ang[1]), ca.cos(eul_ang[0]) * ca.tan(eul_ang[1])
+        ),
+        ca.horzcat(0, ca.cos(eul_ang[0]), -ca.sin(eul_ang[0])),
+        ca.horzcat(
+            0, ca.sin(eul_ang[0]) / ca.cos(eul_ang[1]), ca.cos(eul_ang[0]) / ca.cos(eul_ang[1])
+        ),
+    )
+
+
+def dW2s(eul_ang: ca.MX, deul_ang: ca.MX) -> ca.MX:
+    """Compute the time derivative of the symbolical W2 matrix."""
+    return W2s(eul_ang) @ ca.skew(deul_ang)
+
+
+def rungeKuttaExpr(x, u, dt, fc) -> ca.MX:
     """Perform one step of the 4th order Runge-Kutta integration method.
 
     Args:
         x (ca.MX): The state vector.
         u (ca.MX): The control input vector.
         dt (float): The time step.
-        f (ca.Function): The function to discretize.
+        fc (ca.Function): The continuous function to discretize.
 
     Returns:
-        ca.Function: The discrete dynamica function.
+        ca.MX: The discrete dynamics function.
     """
-    k1 = f(x, u)
-    k2 = f(x + dt / 2 * k1, u)
-    k3 = f(x + dt / 2 * k2, u)
-    k4 = f(x + dt * k3, u)
+    k1 = fc(x, u)
+    k2 = fc(x + dt / 2 * k1, u)
+    k3 = fc(x + dt / 2 * k2, u)
+    k4 = fc(x + dt * k3, u)
     xn = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
-    return xn, ca.Function("disc_dyn", [x, u], [xn], ["x", "u"], ["xn"])
+    return xn
+
+
+def rungeKuttaFcn(nx, nu, dt, fc) -> ca.Function:
+    x = ca.MX.sym("x", nx)
+    u = ca.MX.sym("u", nu)
+    xn = rungeKuttaExpr(x, u, dt, fc)
+    return ca.Function("disc_dyn", [x, u], [xn], ["x", "u"], ["xn"])
