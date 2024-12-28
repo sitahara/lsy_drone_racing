@@ -4,7 +4,13 @@ import casadi as ca
 import l4acados as l4a
 import numpy as np
 import scipy as sp
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSimSolver
+from acados_template import (
+    AcadosModel,
+    AcadosOcp,
+    AcadosOcpSolver,
+    AcadosSimSolver,
+    ZoroDescription,
+)
 from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
@@ -25,6 +31,8 @@ class MPC_ACADOS(MPC_BASE):
         export_dir: str = "generated_code/mpc_acados",
         cost_type: str = "Linear",
         useGP: bool = False,
+        useZoro: bool = False,
+        json_file: str = "acados_ocp",
     ):
         """Initialize the MPC_ACADOS controller.
 
@@ -37,6 +45,8 @@ class MPC_ACADOS(MPC_BASE):
         self.cost_type = cost_type
         self.export_dir = export_dir
         self.useGP = useGP
+        self.useZoro = useZoro
+        self.json_file = json_file
 
         # Define the dynamics model, constraints, and cost matrices
         # super().setupDynamics() # This is already done in the base class
@@ -241,7 +251,7 @@ class MPC_ACADOS(MPC_BASE):
         if self.useGateConstraints:
             NotImplementedError("Gate constraints not implemented yet.")
             # ocp = self.initGateConstraints(ocp)
-
+        ocp = self.initZoro(ocp)
         # Code generation
         ocp.code_export_directory = self.export_dir
         self.ocp = ocp
@@ -281,6 +291,9 @@ class MPC_ACADOS(MPC_BASE):
             # phase 1
             self.ocp_solver.options_set("rti_phase", 1)
             status = self.ocp_solver.solve()
+
+            if self.useZoro:
+                self.ocp_solver.custom_update([])
 
             # phase 2
             self.ocp_solver.options_set("rti_phase", 2)
@@ -351,4 +364,36 @@ class MPC_ACADOS(MPC_BASE):
         # for stage in range(self.n_horizon + 1):
         #     self.ocp_solver.constraints_set(stage, "lh", self.ocp.constraints.lh)
         #     self.ocp_solver.constraints_set(stage, "uh", self.ocp.constraints.uh)
-        return None
+        return
+
+    def initZoro(self, ocp: AcadosOcp):
+        if self.useZoro:
+            # custom update: disturbance propagation
+            ocp.solver_options.custom_update_filename = "custom_update_function.c"
+            ocp.solver_options.custom_update_header_filename = "custom_update_function.h"
+
+            ocp.solver_options.custom_update_copy = False
+            ocp.solver_options.custom_templates = [
+                ("custom_update_function_zoro_template.in.c", "custom_update_function.c"),
+                ("custom_update_function_zoro_template.in.h", "custom_update_function.h"),
+            ]
+            # zoro stuff
+            zoro_description = ZoroDescription()
+            zoro_description.backoff_scaling_gamma = 3.0
+            # uncertainty propagation: P_{k+1} = (A_k+B_k K) @ P_k @ (A_k+B_kK)^T + G @ W @ G^T
+            # G.shape = (nx, nw), W.shape = (nw, nw)
+            # Noisy dynamics: x_{k+1} = A_k x_k + B_k u_k + G w_k
+            # w_k ~ N(0, W)
+
+            # Noise matrix W
+            W = np.eye(self.nx) * 1e-3
+            zoro_description.fdbk_K_mat = np.zeros((self.nu, self.nx))
+            zoro_description.unc_jac_G_mat = 0.1 * np.diag(np.ones(self.nx))
+            zoro_description.P0_mat = W
+            zoro_description.W_mat = W
+            zoro_description.idx_lbx_t = list(range(self.nx))
+            zoro_description.idx_ubx_t = list(range(self.nx))
+            zoro_description.idx_lbx_e_t = list(range(self.nx))
+            zoro_description.idx_ubx_e_t = list(range(self.nx))
+            ocp.zoro_description = zoro_description
+        return ocp
