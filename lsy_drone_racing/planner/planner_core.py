@@ -175,16 +175,16 @@ class PlannerCore:
         """
         col_num = 0
         for i in range(len(ob)):
-            d = [
-                ((ix - ob[i][0]) ** 2 + (iy - ob[i][1]) ** 2) - ob[i][2] ** 2
-                for (ix, iy) in zip(fp.x, fp.y)
-            ]
+            d = np.array(
+                [
+                    ((ix - ob[i][0]) ** 2 + (iy - ob[i][1]) ** 2) - ob[i][2] ** 2
+                    for (ix, iy) in zip(fp.x, fp.y)
+                ]
+            )
 
-            collision = any([di <= 0 for di in d])
-
-            if collision:
-                return False
-
+            collision = np.sum(d <= 0)
+            col_num += collision
+        return col_num
 
     def check_paths(
         self, fplist: List[FrenetPath], ob: List[Tuple[float, float, float]]

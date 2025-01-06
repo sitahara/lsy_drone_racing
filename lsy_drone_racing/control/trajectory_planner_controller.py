@@ -36,7 +36,7 @@ class TrajectoryController(BaseController):
             initial_info: Additional environment information from the reset.
         """
         super().__init__(initial_obs, initial_info)
-        self.planner = Planner()
+        self.planner = Planner(DEBUG=True)
         waypoints = np.array(
             [
                 [1.0, 1.0, 0.0],

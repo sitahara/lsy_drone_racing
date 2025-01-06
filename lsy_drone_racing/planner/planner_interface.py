@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 import numpy as np
 
 from .planner_core import PlannerCore
@@ -22,6 +24,7 @@ class Planner:
         T_PRED: float = 1.0,
         K_J: float = 0.5,
         K_D: float = 8.0,
+        DEBUG: bool = False,
     ):
         """Initializes the planner core.
 
@@ -42,6 +45,8 @@ class Planner:
             Weight constant for the trajectory's jerk.
         K_D : float
             Weight constant for the terminal deviation from the desired trajectory.
+        DEBUG : bool
+            Enables or disables display of planning information on a separate matplotlib window.
         """
         self.planner_core = PlannerCore(
             MAX_CURVATURE=MAX_CURVATURE,
@@ -52,6 +57,19 @@ class Planner:
             K_J=K_J,
             K_D=K_D,
         )
+        self.DEBUG = DEBUG
+        print(f"Debugging is {'Enabled' if self.DEBUG else 'Disabled'}")
+
+        if self.DEBUG is True:
+            self.fig, self.ax = plt.subplots()
+            self.ax.grid(True)
+            self.ax.set_xlim(-2, 2)
+            self.ax.set_ylim(-2, 2)
+            self.ax.set_aspect("equal", adjustable="box")
+            self.ax.set_xlabel("x")
+            self.ax.set_ylabel("y")
+            plt.ion()
+            plt.show(block=False)
 
     def create_obstacles(
         self,
@@ -254,7 +272,50 @@ class Planner:
             reference_csp, s, d, 0.0, 0.0, ob
         )
 
+        # Debug plotting
+        if self.DEBUG is True:
+            self.DEBUG_draw_state(path, reference_csp, fplist, ob)
+
         if path is None:
             return None, reference_csp, fplist
         else:
             return path, reference_csp, fplist
+
+    def DEBUG_draw_state(
+        self,
+        fp_best: FrenetPath,
+        ref_csp: CSP_2D,
+        fplist: List[FrenetPath],
+        obstacles: List[Tuple[float, float, float]],
+    ) -> None:
+        """Draws current 2D state on a plot."""
+        if self.DEBUG is False:
+            return
+
+        # Clear previous drawing
+        self.ax.clear()
+
+        # Reference trajectory
+        self.ax.plot(ref_csp.x_sampled, ref_csp.y_sampled, "-b")
+
+        # All predicted trajectories
+        for fp in fplist:
+            self.ax.plot(fp.x, fp.y)
+
+        # Obstacles
+        for i in range(len(obstacles)):
+            circle = patches.Circle(
+                (obstacles[i][0], obstacles[i][1]),
+                obstacles[i][2],
+                edgecolor="green",
+                facecolor="none",
+                lw=2,
+            )
+            self.ax.add_patch(circle)
+
+        # Best path
+        self.ax.plot(fp_best.x, fp_best.y, "-oy")
+
+        # Finally, draw new figure
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
