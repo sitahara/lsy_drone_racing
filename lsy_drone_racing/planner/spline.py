@@ -1,28 +1,30 @@
+"""Implementations of various curves used in the planner."""
+
 import math
+from typing import List, Tuple
 
 import numpy as np
 from scipy.interpolate import CubicSpline
 
 
 class CSP_2D:
-    """A class denoting the cubic-spline curve on a 2D surface.
-    Since there's no implementation of such spline curve in scipy (only 1D interpolation is available),
-    I decided to make it myself.
+    """A class denoting a geometric cubic-spline curve on a 2D surface.
+
+    It's possible to include Z coordinates in this object to create a spline curve in 3D space,
+    but keep in mind that only 2 dimensional spline curve is considered
+    when calculating curvature and yaw.
     """
 
-    def __init__(self, x, y, z):
+    def __init__(self, x: List[float], y: List[float], z: List[float]):
         """Takes coordinates of knot-points and creates spline objects.
 
-        Parameters
-        ----------
-        x : list
-            x coordinates for data points.
-        y : list
-            y coordinates for data points.
-        z0 : float
-            z coordinate at the beginning of the path, usually the height of a gate.
-        z1 : list
-            z coordinate at the end of the path.
+        Args:
+            x : list
+                x coordinates for data points.
+            y : list
+                y coordinates for data points.
+            z : list
+                z coordinates for data points.
         """
         self.knot_x = x
         self.knot_y = y
@@ -38,83 +40,91 @@ class CSP_2D:
         self.s.extend(np.cumsum(self.ds))
 
         # Creation of spline curve objects
-        self.spline_x = CubicSpline(self.s, self.knot_x)
-        self.spline_y = CubicSpline(self.s, self.knot_y)
-        self.spline_z = CubicSpline(self.s, self.knot_z)
+        try:
+            self.spline_x = CubicSpline(self.s, self.knot_x)
+            self.spline_y = CubicSpline(self.s, self.knot_y)
+            self.spline_z = CubicSpline(self.s, self.knot_z)
+        except ValueError:
+            print(self.knot_x)
+            print(self.knot_y)
+            print(self.sd)
+            assert 1 == 2
+
+        # Sample generated spline for future use
         self.s_for_sample = np.linspace(0.0, self.s[-1], 100)
         self.x_sampled = self.spline_x(self.s_for_sample)
         self.y_sampled = self.spline_y(self.s_for_sample)
         self.z_sampled = self.spline_z(self.s_for_sample)
 
-    def calc_position(self, s):
-        """
-        Given an arc parameter `s`, returns the position at cooresponding location
+    def calc_position(self, s: float) -> Tuple[float, float, float]:
+        """Given an arc parameter `s`, returns the position at cooresponding location.
+
+        Args:
+            s:
+                Arc parameter at which position is calculated.
+
+        Returns:
+            Position at the input arc parameter.
         """
         return self.spline_x(s), self.spline_y(s), self.spline_z(s)
 
-    def calc_curvature(self, s):
-        """calc curvature.
+    def calc_curvature(self, s: float) -> float:
+        """Calculate curvature at a position.
 
-        Parameters
-        ----------
-        s : float
-            distance from the start point. if `s` is outside the data point's
-            range, return None.
+        Args:
+            s : float
+                Distance from the start point.
 
-        Returns
-        -------
-        k : float
-            curvature for given s.
+        Returns:
+            Curvature for given position `s`.
         """
         dx = self.spline_x(s, nu=1)
         ddx = self.spline_x(s, nu=2)
         dy = self.spline_y(s, nu=1)
         ddy = self.spline_y(s, nu=2)
+
+        # 2D curvature calculation of a parametric curve
         k = (ddy * dx - ddx * dy) / ((dx**2 + dy**2) ** (3 / 2))
         return k
 
-    def calc_yaw(self, s):
-        """
-        calc yaw
+    def calc_yaw(self, s: float) -> float:
+        """Calculate yaw at a position.
 
-        Parameters
-        ----------
-        s : float
-            distance from the start point. if `s` is outside the data point's
-            range, return None.
+        'Yaw' in this context means the heading of a curve segment.
 
-        Returns
-        -------
-        yaw : float
-            yaw angle (tangent vector) for given s.
+        Args:
+            s:
+                distance from the start point. if `s` is outside the data point's
+                range, return None.
+
+        Returns:
+            Yaw angle (tangent vector) for given s.
         """
         dx = self.spline_x(s, nu=1)
         dy = self.spline_y(s, nu=1)
         yaw = math.atan2(dy, dx)
         return yaw
 
-    def cartesian_to_frenet(self, x, y):
-        """
-        Converts cartesian coordinates to those wrt frenet frame on this curve.
+    def cartesian_to_frenet(self, x: float, y: float) -> Tuple[float, float]:
+        """Converts cartesian coordinates to those wrt frenet frame on this curve.
+
         Useful for determining the initial condition of planning.
         Sign of D is calcuted by taking the inner product of error vector and unit vector in D axis.
         Unit vector of D axis is calculated using yaw angle with calc_yaw(s_closest)
 
-        Parameters
-        ----------
-        x : float
-            distance from the start point. if `s` is outside the data point's
-            range, return None.
-        y : float
-            distance from the start point. if `s` is outside the data point's
-            range, return None.
+        Args:
+            x:
+                distance from the start point. if `s` is outside the data point's
+                range, return None.
+            y:
+                distance from the start point. if `s` is outside the data point's
+                range, return None.
 
-        Returns
-        -------
-        s : float
-            S coordinate of the point on the frenet frame.
-        d : float
-            D coordinate (deviation) of the point on the frenet frame.
+        Returns:
+            s:
+                S coordinate (position on the arc) of the point on the frenet frame.
+            d:
+                D coordinate (deviation) of the point on the frenet frame.
         """
         # To reduce the computational load, use self.x_sampled and self.y_sampled to search for the closest point
         diff_x_squared = (x - self.x_sampled) ** 2
@@ -142,37 +152,26 @@ class CSP_2D:
 
 
 class QuarticSpline_2D:
-    """
-    A class denoting the Quartic(4)-spline curve on a 2D surface.
-    Uses Initial
-    - Position: d0
-    - Velocity (1st order Derivative of value over parameter): d_d0
-    - Acceleration (2nd order Derivative of value over parameter): dd_d0
-    and Terminal
-    - Velocity (1st order Derivative of value over parameter): d_dT
-    - Acceleration (2nd order Derivative of value over parameter): dd_dT
-    to calculate the coeffecients.
-    """
+    """A class denoting the Quartic(4)-spline curve."""
 
-    def __init__(self, T, d0, d_d0, dd_d0, d_dT, dd_dT):
-        """
-        Calculates coefficients of the Quartic spline in the frenet frame.
+    def __init__(self, T: float, d0: float, d_d0: float, dd_d0: float, d_dT: float, dd_dT: float):
+        """Calculates coefficients of the Quartic spline in the frenet frame.
+
         Note that all parameters are denoted in the frenet frame
 
-        Parameters
-        ----------
-        T: float
-            Time horizon of the trajectory. Basically changes the length of the curve generated in this function.
-        d0 : float
-            Initial position (lateral deviation) of the Quartic curve.
-        d_d0 : float
-            Initial derivative of the Quartic curve.
-        dd_d0 : float
-            Initial 2nd-derivative of the Quartic curve.
-        d_dT : float
-            Terminal derivative of the Quartic curve. Default value
-        dd_dT : float
-            Terminal derivative of the Quartic curve.
+        Args:
+            T: float
+                Time horizon of the trajectory. Basically changes the length of the curve generated in this function.
+            d0 : float
+                Initial position (lateral deviation) of the Quartic curve.
+            d_d0 : float
+                Initial derivative of the Quartic curve.
+            dd_d0 : float
+                Initial 2nd-derivative of the Quartic curve.
+            d_dT : float
+                Terminal derivative of the Quartic curve. Default value
+            dd_dT : float
+                Terminal derivative of the Quartic curve.
         """
         self.a0 = d0
         self.a1 = d_d0
@@ -185,42 +184,64 @@ class QuarticSpline_2D:
         self.a3 = x[0]
         self.a4 = x[1]
 
-    def calc_point(self, t):
+    def calc_point(self, t: float) -> float:
+        """Calculates the value from the spline polynomial at a given parameter."""
         xt = self.a0 + self.a1 * t + self.a2 * t**2 + self.a3 * t**3 + self.a4 * t**4
 
         return xt
 
-    def calc_first_derivative(self, t):
+    def calc_first_derivative(self, t: float) -> float:
+        """Calculates the first derivative of the spline polynomial at a given parameter."""
         xt = self.a1 + 2 * self.a2 * t + 3 * self.a3 * t**2 + 4 * self.a4 * t**3
 
         return xt
 
-    def calc_second_derivative(self, t):
+    def calc_second_derivative(self, t: float) -> float:
+        """Calculates the second derivative of the spline polynomial at a given parameter."""
         xt = 2 * self.a2 + 6 * self.a3 * t + 12 * self.a4 * t**2
 
         return xt
 
-    def calc_third_derivative(self, t):
+    def calc_third_derivative(self, t: float) -> float:
+        """Calculates the third derivative of the spline polynomial at a given parameter."""
         xt = 6 * self.a3 + 24 * self.a4 * t
 
         return xt
 
 
 class QuinticSpline_2D:
-    """
-    A class denoting the Quartic(4)-spline curve on a 2D surface.
-    Uses Initial
-    - Position: d0
-    - Velocity (1st order Derivative of value over parameter): d_d0
-    - Acceleration (2nd order Derivative of value over parameter): dd_d0
-    and Terminal
-    - Position: dT
-    - Velocity (1st order Derivative of value over parameter): d_dT
-    - Acceleration (2nd order Derivative of value over parameter): dd_dT
-    to calculate the coeffecients.
-    """
+    """A class denoting the Quintic(5)-spline curve."""
 
-    def __init__(self, T, d0, d_d0, dd_d0, dT, d_dT=0.0, dd_dT=0.0):
+    def __init__(
+        self,
+        T: float,
+        d0: float,
+        d_d0: float,
+        dd_d0: float,
+        dT: float,
+        d_dT: float = 0.0,
+        dd_dT: float = 0.0,
+    ):
+        """Calculates coefficients of the Quintic spline in the frenet frame.
+
+        Note that all parameters are denoted in the frenet frame
+
+        Args:
+            T:
+                Time horizon of the trajectory. Basically changes the length of the curve generated in this function.
+            d0:
+                Initial position (lateral deviation) of the Quintic curve.
+            d_d0:
+                Initial derivative of the Quintic curve.
+            dd_d0:
+                Initial 2nd-derivative of the Quintic curve.
+            dT:
+                Terminal position (lateral deviation) of the Quintic curve.
+            d_dT:
+                Terminal derivative of the Quintic curve.
+            dd_dT:
+                Terminal 2nd-derivative of the Quintic curve.
+        """
         self.a0 = d0
         self.a1 = d_d0
         self.a2 = dd_d0 / 2.0
@@ -241,7 +262,8 @@ class QuinticSpline_2D:
         self.a4 = x[1]
         self.a5 = x[2]
 
-    def calc_point(self, t):
+    def calc_point(self, t: float) -> float:
+        """Calculates the value from the spline polynomial at a given parameter."""
         xt = (
             self.a0
             + self.a1 * t
@@ -253,58 +275,72 @@ class QuinticSpline_2D:
 
         return xt
 
-    def calc_first_derivative(self, t):
+    def calc_first_derivative(self, t: float) -> float:
+        """Calculates the first derivative of the spline polynomial at a given parameter."""
         xt = (
             self.a1 + 2 * self.a2 * t + 3 * self.a3 * t**2 + 4 * self.a4 * t**3 + 5 * self.a5 * t**4
         )
 
         return xt
 
+    def calc_second_derivative(self, t: float) -> float:
+        """Calculates the second derivative of the spline polynomial at a given parameter."""
+        xt = 2 * self.a2 + 6 * self.a3 * t + 12 * self.a4 * t**2 + 20 * self.a5 * t**3
+
+        return xt
+
+    def calc_third_derivative(self, t: float) -> float:
+        """Calculates the third derivative of the spline polynomial at a given parameter."""
+        xt = 6 * self.a3 + 24 * self.a4 * t + 60 * self.a5 * t**2
+
+        return xt
+
 
 class Line_2D:
-    """
-    I'm sick of low-performing Quartic/Quintic splines, I just decided to make a line as
-    Trajectory inside frenet frame. No one can stop me hahahahahha
-    """
+    """A class denoting a line on a 2D surface."""
 
-    def __init__(self, T, d0, dT):
-        """
-        Calculates coefficients of the Quartic spline in the frenet frame.
-        Note that all parameters are denoted in the frenet frame
+    def __init__(self, T: float, d0: float, dT: float) -> float:
+        """Calculates line's coefficients from initial and terminal conditions.
 
-        Parameters
-        ----------
-        T: float
-            Time horizon of the trajectory. Basically changes the length of the curve generated in this function.
-        d0 : float
-            Initial position (lateral deviation) of the Quartic curve.
-        d_dT : float
-            Terminal posiion of the curve.
+        Args:
+            T:
+                Time horizon of the trajectory.
+                Basically changes the length of the line generated in this function.
+            d0:
+                Initial position (lateral deviation) of the line.
+            dT:
+                Terminal posiion of the line.
         """
         self.a0 = d0
         self.a1 = (dT - d0) / T
 
-    def calc_point(self, t):
+    def calc_point(self, t: float) -> float:
+        """Calculates the coordinate of a point, given a parameter."""
         xt = self.a0 + self.a1 * t
 
         return xt
 
-    def calc_first_derivative(self, t):
+    def calc_first_derivative(self, t: float) -> float:
+        """Calculates the first derivative of a line at a point."""
         return self.a1
 
-    def calc_second_derivative(self, t):
+    def calc_second_derivative(self, t: float) -> float:
+        """Calculates the second derivative of a line at a point."""
         return 0
 
-    def calc_third_derivative(self, t):
+    def calc_third_derivative(self, t: float) -> float:
+        """Calculates the third derivative of a line at a point."""
         return 0
 
 
 class FrenetPath:
-    """
-    An object that stores path on frenet frame.
+    """An object that stores path on frenet frame.
+
+    Uses list to store various information on sampled positions in one frenet path.
     """
 
     def __init__(self):
+        """Initializes member variables for use."""
         self.t = []  # Sampling parameter (corresponds to time)
         self.d = []  # Lateral position
         self.d_d = []  # Change rate of lateral position

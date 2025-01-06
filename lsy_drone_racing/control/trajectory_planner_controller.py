@@ -9,17 +9,16 @@ At each time step, the controller computes the next desired position by evaluati
     trajectory if you receive updated gate and obstacle poses.
 """
 
-from __future__ import annotations  # Python 3.10 type hints
+from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pybullet as p
 from scipy.interpolate import CubicSpline
-from lsy_drone_racing.planner import Planner
-import time
 
 from lsy_drone_racing.control import BaseController
+from lsy_drone_racing.planner import Planner
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -111,7 +110,7 @@ class TrajectoryController(BaseController):
                     lifeTime=0,  # 0 means the line persists indefinitely
                     physicsClientId=0,
                 )
-        if self._tick % 1000 == 0:
+        if self._tick % 100 == 0:
             for i in range(len(ref_path.x_sampled) - 1):
                 p.addUserDebugLine(
                     [ref_path.x_sampled[i], ref_path.y_sampled[i], 0.0],

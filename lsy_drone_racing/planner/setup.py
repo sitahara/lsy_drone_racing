@@ -5,7 +5,7 @@ setup(
     version="0.1.0",  # Version
     packages=find_packages(where="external"),  # Automatically find packages in the directory
     package_dir={"": "external"},
-    description="A library for my project",
-    author="Your Name",
-    author_email="your.email@example.com",
+    description="A planner library for lsy's drone racing course",
+    author="Shotaro Itahara",
+    author_email="shotaro.itahara@tum.de",
 )
