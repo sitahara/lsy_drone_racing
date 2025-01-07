@@ -18,7 +18,7 @@ import pybullet as p
 from scipy.interpolate import CubicSpline
 
 from lsy_drone_racing.control import BaseController
-from lsy_drone_racing.planner import Planner
+from lsy_drone_racing.planner import ObservationManager, Planner
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -37,6 +37,7 @@ class TrajectoryController(BaseController):
         """
         super().__init__(initial_obs, initial_info)
         self.planner = Planner(DEBUG=True)
+        self.Mgr = ObservationManager()
         waypoints = np.array(
             [
                 [1.0, 1.0, 0.0],
@@ -88,6 +89,7 @@ class TrajectoryController(BaseController):
             The drone state [x, y, z, vx, vy, vz, ax, ay, az, yaw, rrate, prate, yrate] as a numpy
                 array.
         """
+        obs = self.Mgr.update(obs)
         gate_x, gate_y, gate_z = (
             obs["gates_pos"][:, 0],
             obs["gates_pos"][:, 1],
@@ -122,9 +124,7 @@ class TrajectoryController(BaseController):
                 )
 
         # target_pos = self.trajectory(min(self._tick / self._freq, self.t_total))
-        return np.concatenate(
-            (np.array([result_path.x[10], result_path.y[10], result_path.z[10]]), np.zeros(10))
-        )
+        return np.concatenate((np.array([0, 0, 0]), np.zeros(10)))
 
     def step_callback(
         self,
