@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
-    import numpy as np
     from np.typing import NDArray
 
 
@@ -44,20 +45,19 @@ class ObservationManager:
 
         if self.first_update is True:  # populate the variable with the initial value
             self.first_update = False
-            self.gate_x = gate_x
-            self.gate_y = gate_y
-            self.gate_z = gate_z
-            self.gate_yaw = gate_yaw
-            self.obstacle_x = obstacle_x
-            self.obstacle_y = obstacle_y
-
+            self.gate_x = np.array(gate_x, copy=True)
+            self.gate_y = np.array(gate_y, copy=True)
+            self.gate_z = np.array(gate_z, copy=True)
+            self.gate_yaw = np.array(gate_yaw, copy=True)
+            self.obstacle_x = np.array(obstacle_x, copy=True)
+            self.obstacle_y = np.array(obstacle_y, copy=True)
             #   Since it's not guaranteed that the coordinates' values
             # reflect the ground truth even if is_*_truth is True, we
             # record the initial value, and compare the observation against
             # the recorded initial nominal value.
             # ToDo for developers: fix the observation please
-            self.gate_x_nominal = gate_x
-            self.obstacle_x_nominal = obstacle_x
+            self.gate_x_nominal = np.array(gate_x, copy=True)
+            self.obstacle_x_nominal = np.array(obstacle_x, copy=True)
 
         else:
             # Update if there's any truth to it
@@ -72,6 +72,7 @@ class ObservationManager:
             self.gate_yaw[is_gate_truth] = gate_yaw[is_gate_truth]
             self.obstacle_x[is_obstacle_truth] = obstacle_x[is_obstacle_truth]
             self.obstacle_y[is_obstacle_truth] = obstacle_y[is_obstacle_truth]
+            print(gate_x, self.gate_x_nominal, is_gate_truth, self.gate_x)
 
         # Putting back updated values
         obs["gates_pos"][:, 0] = self.gate_x
@@ -80,5 +81,4 @@ class ObservationManager:
         obs["gates_rpy"][:, 2] = self.gate_yaw
         obs["obstacles_pos"][:, 0] = self.obstacle_x
         obs["obstacles_pos"][:, 1] = self.obstacle_y
-        print(gate_x, self.gate_x)
         return obs
