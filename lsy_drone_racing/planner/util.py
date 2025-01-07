@@ -52,7 +52,7 @@ class ObservationManager:
             self.obstacle_x = np.array(obstacle_x, copy=True)
             self.obstacle_y = np.array(obstacle_y, copy=True)
             #   Since it's not guaranteed that the coordinates' values
-            # reflect the ground truth even if is_*_truth is True, we
+            # reflect the ground truth even if `is_*_truth` is True, we
             # record the initial value, and compare the observation against
             # the recorded initial nominal value.
             # ToDo for developers: fix the observation please
@@ -72,7 +72,6 @@ class ObservationManager:
             self.gate_yaw[is_gate_truth] = gate_yaw[is_gate_truth]
             self.obstacle_x[is_obstacle_truth] = obstacle_x[is_obstacle_truth]
             self.obstacle_y[is_obstacle_truth] = obstacle_y[is_obstacle_truth]
-            print(gate_x, self.gate_x_nominal, is_gate_truth, self.gate_x)
 
         # Putting back updated values
         obs["gates_pos"][:, 0] = self.gate_x

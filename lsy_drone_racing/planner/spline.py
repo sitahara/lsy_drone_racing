@@ -40,15 +40,9 @@ class CSP_2D:
         self.s.extend(np.cumsum(self.ds))
 
         # Creation of spline curve objects
-        try:
-            self.spline_x = CubicSpline(self.s, self.knot_x)
-            self.spline_y = CubicSpline(self.s, self.knot_y)
-            self.spline_z = CubicSpline(self.s, self.knot_z)
-        except ValueError:
-            print(self.knot_x)
-            print(self.knot_y)
-            print(self.sd)
-            assert 1 == 2
+        self.spline_x = CubicSpline(self.s, self.knot_x)
+        self.spline_y = CubicSpline(self.s, self.knot_y)
+        self.spline_z = CubicSpline(self.s, self.knot_z)
 
         # Sample generated spline for future use
         self.s_for_sample = np.linspace(0.0, self.s[-1], 100)

@@ -22,6 +22,7 @@ class PlannerCore:
         T_PRED: float = 1.0,
         K_J: float = 0.5,
         K_D: float = 5.0,
+        DEBUG: bool = False,
     ):
         """Initialize planning parameters.
 
@@ -41,17 +42,22 @@ class PlannerCore:
                 Weight constant for the trajectory's rate of change of acceleration (jerk).
             K_D:
                 Weight constant for the terminal deviation from the desired trajectory.
+            DEBUG:
+                Enables or disables output of some parameters to the console.
         """
         # Planning parameters
-        self.MAX_CURVATURE = MAX_CURVATURE  # Maximum curvature in reciprocal meters (1/m)
-        self.MAX_ROAD_WIDTH = MAX_ROAD_WIDTH  # Maximum road width in meters
-        self.D_ROAD_W = D_ROAD_W  # Road width sampling length in meters
-        self.DT = DT  # Time tick in seconds
-        self.T_PRED = T_PRED  # Prediction time in seconds
+        self.MAX_CURVATURE = MAX_CURVATURE
+        self.MAX_ROAD_WIDTH = MAX_ROAD_WIDTH
+        self.D_ROAD_W = D_ROAD_W
+        self.DT = DT
+        self.T_PRED = T_PRED
 
         # Cost weights
         self.K_J = K_J
         self.K_D = K_D
+
+        # debug
+        self.DEBUG = DEBUG
 
     def calc_frenet_paths(
         self, s0: float, d0: float, d_d0: float, dd_d0: float
@@ -263,5 +269,6 @@ class PlannerCore:
                 best_idx = idx
                 min_cost = fp.cost
                 best_path = fp
-        print(min_cost)
+        if self.DEBUG is True:
+            print(min_cost)
         return fplist, best_idx, best_path

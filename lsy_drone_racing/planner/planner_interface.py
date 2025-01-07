@@ -56,6 +56,7 @@ class Planner:
             T_PRED=T_PRED,
             K_J=K_J,
             K_D=K_D,
+            DEBUG=DEBUG
         )
         self.DEBUG = DEBUG
         print(f"Debugging is {'Enabled' if self.DEBUG else 'Disabled'}")
