@@ -1,5 +1,7 @@
 """Module for Model Predictive Controller implementation using do_mpc."""
 
+from __future__ import annotations
+
 import casadi as ca
 import numpy as np
 import pybullet as p
