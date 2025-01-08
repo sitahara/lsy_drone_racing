@@ -3,9 +3,10 @@
 import casadi as ca
 import numpy as np
 import pybullet as p
-import scipy as sp
+import scipy
 from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
+import scipy.linalg
 from scipy.spatial.transform import Rotation as Rmat
 
 from lsy_drone_racing.control import BaseController
@@ -42,12 +43,14 @@ class MPC_BASE(BaseController):
         soft_penalty: float = 1e3,
         useObstacleConstraints: bool = True,
         useGateConstraints: bool = False,
+        useControlRates: bool = False,
         out_dir: str = "generated_code/mpc_base",
         **kwargs,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
         self.initial_obs = initial_obs
+        self.useControlRates = useControlRates
         # Adjustable parameters
         self.useMellinger = useMellinger  # whether to use the thrust or Mellinger interface
         self.useAngVel = (
@@ -71,8 +74,8 @@ class MPC_BASE(BaseController):
         self.soft_penalty = soft_penalty  # penalty for soft constraints
         self.tick = 0  # running tick that indicates when optimization problem should be reexecuted
         # Setup various variables
-        self.setupParameters()
-        self.setupConstraints()
+        self.setupNominalParameters()
+        self.setupBaseConstraints()
 
         # Cost function parameters
         self.setupCostFunction()
@@ -87,6 +90,7 @@ class MPC_BASE(BaseController):
         self.modelName = None  # Model name (AcadosModel, Code generation)
         self.x_guess = None  # holds the last solution for the state trajectory (already shifted)
         self.u_guess = None  # holds the last solution for the controls trajectory (already shifted)
+        self.last_action = None  # last action computed by the controller
         self.x_ref = np.zeros(
             (self.nx, self.n_horizon + 1)
         )  # reference trajectory (from current time to horizon)
@@ -298,7 +302,9 @@ class MPC_BASE(BaseController):
         opti.set_value(U_ub, self.u_ub)
         # Set initial guess
         if self.x_guess is None or self.u_guess is None:
-            opti.set_initial(X, np.hstack((self.current_state.reshape(12, 1), self.x_ref[:, 1:])))
+            opti.set_initial(
+                X, np.hstack((self.current_state.reshape(self.nx, 1), self.x_ref[:, 1:]))
+            )
             opti.set_initial(U, self.u_ref)
         else:
             opti.set_initial(X, self.x_guess)
@@ -323,8 +329,8 @@ class MPC_BASE(BaseController):
 
         # Update/Instantiate guess for next iteration
         if self.x_guess is None:
-            self.x_guess = np.hstack((x_sol[:, 1:], x_sol[:, -1].reshape(12, 1)))
-            self.u_guess = np.hstack((u_sol[:, 1:], u_sol[:, -1].reshape(4, 1)))
+            self.x_guess = np.hstack((x_sol[:, 1:], x_sol[:, -1].reshape(self.nx, 1)))
+            self.u_guess = np.hstack((u_sol[:, 1:], u_sol[:, -1].reshape(self.nu, 1)))
         else:
             self.x_guess[:, :-1] = x_sol[:, 1:]
             self.u_guess[:, :-1] = u_sol[:, 1:]
@@ -367,6 +373,8 @@ class MPC_BASE(BaseController):
                 self.ThrustEulerDynamics()
         else:
             raise NotImplementedError  # Not implemented yet
+        if self.useControlRates:
+            self.setupControlRates()
         # Continuous dynamic function
         self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "u"], ["dx"])
         # Discrete dynamic expression and dynamic function
@@ -515,7 +523,7 @@ class MPC_BASE(BaseController):
     #     self.modelName = "MPCThrustEuler"
     #     return None
 
-    def setupConstraints(self):
+    def setupBaseConstraints(self):
         # Setup base constraints and scaling factors
         rpm_lb = 4070.3 + 0.2685 * 0
         rpm_ub = 4070.3 + 0.2685 * 65535
@@ -534,7 +542,7 @@ class MPC_BASE(BaseController):
 
         x_y_max = 3.0
         z_max = 2.5
-        z_min = 0.05
+        z_min = 0.05  # minimum height, safety margin, soft constraints required
         eul_ang_max = 85 / 180 * np.pi
         large_val = 1e3
         self.x_lb = np.array(
@@ -570,6 +578,10 @@ class MPC_BASE(BaseController):
             ]
         ).T
         self.x_scal = self.x_ub - self.x_lb
+        self.u_rate_ub = (self.u_ub - self.u_lb) * 0.3
+        self.u_rate_lb = -(self.u_ub - self.u_lb) * 0.3
+        self.u_rate_scal = self.u_rate_ub - self.u_rate_lb
+        self.du_ref = np.zeros((self.nu, self.n_horizon))
         return None
 
     def set_target_trajectory(self, t_total: float = 8) -> None:
@@ -633,7 +645,7 @@ class MPC_BASE(BaseController):
         self.n_step += 1
         return None
 
-    def setupParameters(self):
+    def setupNominalParameters(self):
         """Setup the unchanging parameters of the drone/environment controller."""
         # Define the (nominal) system parameters
         self.mass = self.initial_info["drone_mass"]  # kg
@@ -672,7 +684,7 @@ class MPC_BASE(BaseController):
         )  # stage cost for states (position, velocity, euler angles, angular velocity)
         Qt = np.array([1, 1, 10, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 1, 1, 1]) / self.x_scal
         R = np.array([1e-2, 1e-2, 1e-2, 1e-2]) / self.u_scal
-        dR = np.array([1e-2, 1e-2, 1e-2, 1e-2]) / self.u_scal
+        dR = np.array([1e-2, 1e-2, 1e-2, 1e-2]) / self.u_rate_scal
         self.Qs = np.diag(Qs)
         self.Qt = np.diag(Qt)  # terminal cost
         self.Rs = np.diag(R)
@@ -689,3 +701,27 @@ class MPC_BASE(BaseController):
         return ca.mtimes([(x - x_ref).T, Q, (x - x_ref)]) + ca.mtimes(
             [(u - u_ref).T, R, (u - u_ref)]
         )
+
+    def setupControlRates(self):
+        """Setup the augmented dynamics for control rates as control inputs."""
+        self.nx += self.nu
+        self.ny = self.nx + self.nu
+        self.x = ca.vertcat(self.x, self.u)
+        self.u = ca.MX.sym("du", self.nu)
+        self.x_ref = np.vstack(
+            (self.x_ref, np.hstack((self.u_ref, self.u_ref[:, -1].reshape(self.nu, 1))))
+        )
+        self.u_ref = np.zeros((self.nu, self.n_horizon))
+
+        self.u_eq = np.zeros((self.nu, 1))
+        self.dx = ca.vertcat(self.dx, self.u)
+        self.Qs = scipy.linalg.block_diag(self.Qs, self.Rs)
+        self.Qt = scipy.linalg.block_diag(self.Qt, self.Rs)
+        self.Rs = self.Rsdelta
+        self.x_lb = np.hstack((self.x_lb, self.u_lb))
+        self.x_ub = np.hstack((self.x_ub, self.u_ub))
+        self.x_scal = np.hstack((self.x_scal, self.u_scal))
+        self.u_lb = self.u_rate_lb
+        self.u_ub = self.u_rate_ub
+        self.u_scal = self.u_rate_scal
+        return None
