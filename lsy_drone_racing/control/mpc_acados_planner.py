@@ -231,27 +231,39 @@ class MPC_ACADOS(MPC_BASE):
             norm1_penalty = self.soft_penalty
 
             # Define slack variables
-            ocp.constraints.idxsbx = np.arange(self.nx)
-            ocp.constraints.lsbx = np.zeros((self.nx,))
-            ocp.constraints.usbx = np.ones((self.nx,))
+            # ocp.constraints.idxsbx = np.arange(self.nx)
+            # ocp.constraints.lsbx = np.zeros((self.nx,))
+            # ocp.constraints.usbx = np.ones((self.nx,))
+            # Define slack variables
+            idxsbx = np.setdiff1d(
+                np.arange(self.nx), [5, 6, 7, 8, 9]
+            )  # [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+            idxsbx = np.array([2])
+            ocp.constraints.idxsbx = idxsbx
+            ocp.constraints.lsbx = np.zeros((len(idxsbx),))
+            ocp.constraints.usbx = np.ones((len(idxsbx),))
 
             ocp.constraints.idxsbu = np.arange(self.nu)
             ocp.constraints.lsbu = np.zeros((self.nu,))
             ocp.constraints.usbu = np.ones((self.nu,))
 
-            ocp.constraints.idxsbx_e = np.arange(self.nx)
-            ocp.constraints.lsbx_e = np.zeros((self.nx,))
-            ocp.constraints.usbx_e = np.ones((self.nx,))
+            ocp.constraints.idxsbx_e = idxsbx
+            ocp.constraints.lsbx_e = np.zeros((len(idxsbx),))
+            ocp.constraints.usbx_e = np.ones((len(idxsbx),))
 
-            ocp.cost.Zl = norm2_penalty * np.ones(self.ny)
-            ocp.cost.Zu = norm2_penalty * np.ones(self.ny)
-            ocp.cost.zl = norm1_penalty * np.ones(self.ny)
-            ocp.cost.zu = norm1_penalty * np.ones(self.ny)
+            # Adjust the size of the penalty matrices to match the number of slack variables
+            ns = len(idxsbx) + self.nu  # Total number of slack variables
+            ns_e = len(idxsbx)  # Total number of slack variables at the end of the horizon
 
-            ocp.cost.Zl_e = norm2_penalty * np.ones(self.nx)
-            ocp.cost.Zu_e = norm2_penalty * np.ones(self.nx)
-            ocp.cost.zl_e = norm1_penalty * np.ones(self.nx)
-            ocp.cost.zu_e = norm1_penalty * np.ones(self.nx)
+            ocp.cost.Zl = norm2_penalty * np.ones(ns)
+            ocp.cost.Zu = norm2_penalty * np.ones(ns)
+            ocp.cost.zl = norm1_penalty * np.ones(ns)
+            ocp.cost.zu = norm1_penalty * np.ones(ns)
+
+            ocp.cost.Zl_e = norm2_penalty * np.ones(ns_e)
+            ocp.cost.Zu_e = norm2_penalty * np.ones(ns_e)
+            ocp.cost.zl_e = norm1_penalty * np.ones(ns_e)
+            ocp.cost.zu_e = norm1_penalty * np.ones(ns_e)
 
             ocp.cost.Zl_0 = norm2_penalty * np.ones(self.nu)
             ocp.cost.Zu_0 = norm2_penalty * np.ones(self.nu)
@@ -428,18 +440,18 @@ class MPC_ACADOS(MPC_BASE):
             result_path, ref_path, _ = self.planner.plan_path_from_observation(
                 gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
             )
+            l = len(result_path.x)
+            self.x_ref[0, :l] = np.array(result_path.x)
+            self.x_ref[1, :l] = np.array(result_path.y)
+            self.x_ref[2, :l] = np.array(result_path.z)
+            for i in range(len(result_path.x) - 1):
+                p.addUserDebugLine(
+                    [result_path.x[i], result_path.y[i], result_path.z[i]],
+                    [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
+                    lineColorRGB=[0, 0, 1],  # Red color
+                    lineWidth=2,
+                    lifeTime=0,  # 0 means the line persists indefinitely
+                    physicsClientId=0,
+                )
 
-            self.x_ref[0, :] = np.array(result_path.x)
-            self.x_ref[1, :] = np.array(result_path.y)
-            self.x_ref[2, :] = np.array(result_path.z)
-            # for i in range(len(result_path.x) - 1):
-            #     p.addUserDebugLine(
-            #         [result_path.x[i], result_path.y[i], result_path.z[i]],
-            #         [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
-            #         lineColorRGB=[1, 0, 0],  # Red color
-            #         lineWidth=2,
-            #         lifeTime=0,  # 0 means the line persists indefinitely
-            #         physicsClientId=0,
-            #     )
         self.n_step += 1
-            
