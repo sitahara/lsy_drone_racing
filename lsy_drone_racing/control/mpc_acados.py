@@ -92,7 +92,12 @@ class MPC_ACADOS(MPC_BASE):
             )
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
         super().updateTargetTrajectory()
-
+        if self.useControlRates:
+            if self.last_action is not None:
+                u_last = self.last_action[-self.nu :]
+            else:
+                u_last = np.zeros(self.nu)
+            self.current_state = np.concatenate([self.current_state, u_last])
         if self.x_guess is None or self.u_guess is None:
             # Use IPOPT optimizer to get initial guess
             action = super().stepIPOPT()
@@ -104,10 +109,10 @@ class MPC_ACADOS(MPC_BASE):
             # action: Full-state command [x, y, z, vx, vy, vz, ax, ay, az, yaw, rrate, prate, yrate] to follow.
             # where ax, ay, az are the acceleration in world frame, rrate, prate, yrate are the roll, pitch, yaw rate in body frame
             acc = (self.x_guess[3:6, 0] - action[3:6]) / self.ts
-            action = np.concatenate([action[:6], acc, [action[8]], action[9:]])
+            action = np.concatenate([action[:6], acc, [action[8]], action[9:12]])
         else:
             # action: [thrust, tau_des]
-            action = np.array(action)
+            action = np.array(action[: self.nu])
         print(
             f"Curren position error: {np.linalg.norm(self.current_state[:3] - self.x_ref[:3, 0])}, Next position: {action[:3]}"
         )
@@ -165,7 +170,7 @@ class MPC_ACADOS(MPC_BASE):
             # Set weighting matrices
             ocp.cost.W = sp.linalg.block_diag(self.Qs, self.Rs)
             ocp.cost.W_e = self.Qt
-            # Set reference trajectory
+            # Set dummy reference trajectory
             ocp.cost.yref = np.zeros((self.ny,))
             ocp.cost.yref_e = np.zeros((self.nx,))
             # Set mapping matrices
