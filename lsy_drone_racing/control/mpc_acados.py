@@ -268,7 +268,7 @@ class MPC_ACADOS(MPC_BASE):
             # self.ocp_solver =
         else:
             self.ocp_solver = AcadosOcpSolver(self.ocp)
-        self.ocp_integrator = AcadosSimSolver(self.ocp)
+        # self.ocp_integrator = AcadosSimSolver(self.ocp)
 
         return None
 
