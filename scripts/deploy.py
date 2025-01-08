@@ -53,14 +53,14 @@ def main(config: str = "level3.toml", controller: str | None = None):
         start_time = time.perf_counter()
         while not rospy.is_shutdown():
             t_loop = time.perf_counter()
-            obs, info = env.obs, env.info
+            obs, info = env.unwrapped.obs, env.unwrapped.info
             action = controller.compute_control(obs, info)
             next_obs, reward, terminated, truncated, info = env.step(action)
             controller.step_callback(action, next_obs, reward, terminated, truncated, info)
             obs = next_obs
             if terminated or truncated:
                 break
-            if (dt := (time.perf_counter() - t_loop)) > (1 / config.env.freq):
+            if (dt := (time.perf_counter() - t_loop)) < (1 / config.env.freq):
                 time.sleep(1 / config.env.freq - dt)
             else:
                 exc = dt - 1 / config.env.freq
