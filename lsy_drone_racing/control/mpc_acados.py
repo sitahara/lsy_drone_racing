@@ -60,6 +60,18 @@ class MPC_ACADOS(MPC_BASE):
 
         # Set the target trajectory
         # super().set_target_trajectory() # This is already done in the base class
+        obs = initial_obs
+        self.obs = obs
+        self.updateObstacleConstraints()
+        if self.useAngVel:
+            w = W1(obs["rpy"]) @ obs["ang_vel"]
+            self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], w.flatten()])
+        else:
+            self.current_state = np.concatenate(
+                [obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]]
+            )
+        super().updateTargetTrajectory()
+        action = super().stepIPOPT()
 
     def reset(self):
         """Reset the MPC controller to its initial state."""
