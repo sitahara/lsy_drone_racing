@@ -109,7 +109,7 @@ class MPC_ACADOS(MPC_BASE):
             # action: [thrust, tau_des]
             action = np.array(action)
         print(
-            f"Curren position error: {np.linalg.norm(self.current_state[:3] - self.x_ref[:3, 0])}, Next position: {action[:3]}"
+            f"Current position error: {np.linalg.norm(self.current_state[:3] - self.x_ref[:3, 0])}, Next position: {action[:3]}"
         )
         # print(f"Current position: {self.current_state[:3]}")
         # print(f"Desired position: {self.x_ref[:3, 1]}")
@@ -328,7 +328,7 @@ class MPC_ACADOS(MPC_BASE):
     def initObstacleConstraints(self, ocp: AcadosOcp) -> AcadosOcp:
         """Initialize the obstacle constraints."""
         self.obstacles_pos = self.initial_obs["obstacles_pos"]
-        self.obstacles_in_range = self.initial_obs["obstacles_in_range"]
+        self.obstacles_visited = self.initial_obs["obstacles_visited"]
         self.obstacle_radius = 0.1
         self.obstacle_constraints = []
         num_obstacles = self.obstacles_pos.shape[0]
@@ -346,12 +346,12 @@ class MPC_ACADOS(MPC_BASE):
 
     def updateObstacleConstraints(self):
         """Update the obstacle constraints based on the current obstacle positions."""
-        if np.array_equal(
-            self.obs["obstacles_in_range"], self.obstacles_in_range
-        ) and np.array_equal(self.obs["gates_in_range"], self.gates_in_range):
+        if np.array_equal(self.obs["obstacles_visited"], self.obstacles_visited) and np.array_equal(
+            self.obs["gates_visited"], self.gates_visited
+        ):
             return None
-        self.obstacles_in_range = self.obs["obstacles_in_range"]
-        self.gates_in_range = self.obs["gates_in_range"]
+        self.obstacles_visited = self.obs["obstacles_visited"]
+        self.gates_visited = self.obs["gates_visited"]
         self.obstacle_pos = self.obs["obstacles_pos"]
         self.gate_pos = self.obs["gates_pos"]
         params = np.concatenate(

@@ -214,7 +214,7 @@ class MPC_BASE(BaseController):
             s_x = np.zeros((self.nx, self.n_horizon + 1))
             s_u = np.zeros((self.nu, self.n_horizon))
             slack_penalty = 0
-        no_slack_states = [2]  # z position
+        no_slack_states = [6, 7, 8]  # euler angles
 
         ### Constraints
 
@@ -661,10 +661,10 @@ class MPC_BASE(BaseController):
         self.ny = self.nx + self.nu  # number of
 
         self.obstacles_pos = self.initial_obs["obstacles_pos"]  # obstacles positions in
-        self.obstacles_in_range = self.initial_obs["obstacles_in_range"]
+        self.obstacles_visited = self.initial_obs["obstacles_visited"]
         self.gates_pos = self.initial_obs["gates_pos"]
         self.gates_rpy = self.initial_obs["gates_rpy"]
-        self.gates_in_range = self.initial_obs["gates_in_range"]
+        self.gates_visited = self.initial_obs["gates_visited"]
 
     def setupCostFunction(self):
         """Setup the cost function for the MPC controller."""
