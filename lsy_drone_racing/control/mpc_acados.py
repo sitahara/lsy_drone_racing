@@ -4,18 +4,12 @@ import casadi as ca
 import l4acados as l4a
 import numpy as np
 import scipy as sp
-from acados_template import (
-    AcadosModel,
-    AcadosOcp,
-    AcadosOcpSolver,
-    AcadosSimSolver,
-    ZoroDescription,
-)
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, ZoroDescription
 from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
 from lsy_drone_racing.control.mpc_base import MPC_BASE
-from lsy_drone_racing.control.utils import W1
+from lsy_drone_racing.mpc_utils import W1
 
 # from lsy_drone_racing.sim.drone import Drone
 # from lsy_drone_racing.sim.physics import GRAVITY

@@ -10,7 +10,7 @@ import scipy.linalg
 from scipy.spatial.transform import Rotation as Rmat
 
 from lsy_drone_racing.control import BaseController
-from lsy_drone_racing.control.utils import (
+from lsy_drone_racing.mpc_utils import (
     W1,
     W2,
     Rbi,

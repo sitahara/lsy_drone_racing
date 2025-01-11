@@ -12,13 +12,8 @@ from acados_template import (
     ZoroDescription,
 )
 from acados_template.utils import ACADOS_INFTY
-from lsy_drone_racing.control.dynamics_classes import (
-    BaseDynamics,
-    ThrustEulerDynamics,
-    TorqueEulerDynamics,
-    ThrustQuaternionDynamics,
-)
-from lsy_drone_racing.control.constraint_class import CONSTRAINTS
+from lsy_drone_racing.mpc_utils.dynamics_classes import BaseDynamics
+from lsy_drone_racing.mpc_utils.costs_classes import BaseCost
 from numpy.typing import NDArray
 
 
@@ -28,30 +23,21 @@ class BaseOptimizer(ABC):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        constraints: CONSTRAINTS,
-        costs: dict,
-        mpc_info: dict = {"ts": 1 / 60, "n_horizon": 60},
+        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
-            "noSlackStates": [],
-            "noSlackControls": [],
-            "useMellinger": True,
             "useGP": False,
             "useZoro": False,
             "export_dir": "generated_code/mpc",
         },
     ):
-        self.ts = mpc_info.get("ts", 1 / 60)
-        self.n_horizon = mpc_info.get("n_horizon", 60)
         self.useSoftConstraints = optimizer_info.get("useSoftConstraints", True)
         self.softPenalty = optimizer_info.get("softPenalty", 1e3)
-        self.noSlackStates = optimizer_info.get("noSlackStates", [2])
-        self.noSlackControls = optimizer_info.get("noSlackControls", 0)
-        self.useMellinger = optimizer_info.get("useMellinger", True)
         self.dynamics = dynamics
+        self.n_horizon = dynamics.n_horizon
+        self.ts = dynamics.ts
         self.costs = costs
-        self.constraints = constraints
         self.nx = dynamics.nx
         self.nu = dynamics.nu
         self.ny = dynamics.ny
@@ -89,21 +75,16 @@ class IPOPTOptimizer(BaseOptimizer):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        constraints: CONSTRAINTS,
-        costs: dict,
-        mpc_info: dict = {"ts": 1 / 60, "n_horizon": 60},
+        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
-            "noSlackStates": [],
-            "noSlackControls": [],
-            "useMellinger": True,
             "useGP": False,
             "useZoro": False,
             "export_dir": "generated_code/mpc",
         },
     ):
-        super().__init__(dynamics, constraints, costs, mpc_info, optimizer_info)
+        super().__init__(dynamics, costs, optimizer_info)
         self.setup_optimizer()
 
     def setup_optimizer(self):
@@ -138,24 +119,28 @@ class IPOPTOptimizer(BaseOptimizer):
         for k in range(self.n_horizon):
             xn = self.dynamics.fd(x=X[:, k], u=U[:, k])["xn"]
             opti.subject_to(X[:, k + 1] == xn)
-        # State/Control constraints with slack variables (no slack for z position)
+        # State/Control constraints with slack variables (no slack for certain states/controls)
         for i in range(self.n_horizon + 1):
             for k in range(self.nx):
-                if k in self.noSlackStates:
+                if k in self.dynamics.noSlackStates:
                     opti.subject_to(opti.bounded(X_lb[k], X[k, i], X_ub[k]))
                 else:
                     opti.subject_to(opti.bounded(X_lb[k] - s_x[k, i], X[k, i], X_ub[k] + s_x[k, i]))
         for i in range(self.n_horizon):
-            opti.subject_to(opti.bounded(U_lb - s_u[:, i], U[:, i], U_ub + s_u[:, i]))
+            for k in range(self.nu):
+                if k in self.dynamics.noSlackControls:
+                    opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
+                else:
+                    opti.subject_to(opti.bounded(U_lb - s_u[:, i], U[:, i], U_ub + s_u[:, i]))
         ### Costs
         cost = 0
-        cost_func = self.costs["cost_function"]
+        stage_cost_function = self.costs.stageCostFunc
+        terminal_cost_function = self.costs.terminalCostFunc
 
         for k in range(self.n_horizon):
-            cost += cost_func(X[:, k], X_ref[:, k], U[:, k], U_ref[:, k])
-        cost += cost_func(
-            X[:, -1], X_ref[:, -1], np.zeros((self.nu, 1)), np.zeros((self.nu, 1))
-        )  # Terminal cost
+            cost += stage_cost_function(X[:, k], U[:, k], X_ref[:, k], U_ref[:, k])
+
+        cost += terminal_cost_function(X[:, -1], X_ref[:, -1])  # Terminal cost
 
         # Add slack penalty to the cost function
         cost += slack_penalty * (ca.sumsqr(s_x) + ca.sumsqr(s_u))
@@ -194,6 +179,7 @@ class IPOPTOptimizer(BaseOptimizer):
         x_ref: NDArray[np.floating],
         u_ref: NDArray[np.floating],
     ) -> NDArray[np.floating]:
+        """Performs one optimization step using the current state, reference trajectory, and the previous solution for warmstarting. Updates the previous solution and returns the control input."""
         # Unpack IPOPT variables
         opti = self.optiVars["opti"]
         X = self.optiVars["X"]
@@ -201,19 +187,15 @@ class IPOPTOptimizer(BaseOptimizer):
         X_ref = self.optiVars["X_ref"]
         U_ref = self.optiVars["U_ref"]
         X0 = self.optiVars["X0"]
-        cost = self.optiVars["cost"]
+        # cost = self.optiVars["cost"]
         X_lb = self.optiVars["X_lb"]
         X_ub = self.optiVars["X_ub"]
         U_lb = self.optiVars["U_lb"]
         U_ub = self.optiVars["U_ub"]
 
         # u_last is needed when using control rates as inputs
-        if self.x_last is None:
-            u_last = self.dynamics.u_eq
-        else:
-            u_last = self.x_last[self.nx - self.nu : self.nx, 1]
 
-        current_state = self.dynamics.transformState(current_state, last_u=u_last)
+        current_state = self.dynamics.transformState(current_state)
         # Set initial state
         opti.set_value(X0, current_state)
         # Set reference trajectory
@@ -244,11 +226,7 @@ class IPOPTOptimizer(BaseOptimizer):
             u_sol = opti.debug.value(U)
 
         # Extract the control input and transform it if needed
-        if self.useMellinger:
-            action = x_sol[:, 1]
-            action = self.dynamics.transformAction(action)
-        else:
-            action = u_sol[:, 0]
+        action = self.dynamics.transformAction(x_sol, u_sol)
         self.last_action = action
 
         # Update/Instantiate guess for next iteration
@@ -260,8 +238,8 @@ class IPOPTOptimizer(BaseOptimizer):
             self.u_guess[:, :-1] = u_sol[:, 1:]
 
         self.x_last = x_sol
-        # print("x_sol: ", x_sol.shape)
         self.u_last = u_sol
+
         # reset the solver after the initial guess
         self.setup_optimizer()
         return action
@@ -271,25 +249,22 @@ class AcadosOptimizer(BaseOptimizer):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        constraints: CONSTRAINTS,
-        costs: dict,
-        mpc_info: dict = {"ts": 1 / 60, "n_horizon": 60},
+        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
-            "noSlackStates": [],
-            "noSlackControls": [],
-            "useMellinger": True,
             "useGP": False,
             "useZoro": False,
             "export_dir": "generated_code/mpc",
+            "json_file": "acados_ocp.json",
+            "IntegratorType": "ERK",
         },
     ):
-        super().__init__(dynamics, constraints, costs, mpc_info, optimizer_info)
-        self.useGP = mpc_info.get("useGP", False)
-        self.useZoro = mpc_info.get("useZoro", False)
-        self.json_file = mpc_info.get("json_file", "acados_ocp.json")
-        self.export_dir = mpc_info.get("export_dir", "generated_code/mpc_acados")
+        super().__init__(dynamics, costs, optimizer_info)
+        self.useGP = optimizer_info.get("useGP", False)
+        self.useZoro = optimizer_info.get("useZoro", False)
+        self.json_file = optimizer_info.get("json_file", "acados_ocp.json")
+        self.export_dir = optimizer_info.get("export_dir", "generated_code/mpc_acados")
         self.setupAcadosModel()
         self.setup_optimizer()
 
@@ -329,46 +304,53 @@ class AcadosOptimizer(BaseOptimizer):
         ocp.solver_options.tol = 1e-3  # tolerance
         ocp.solver_options.qp_tol = 1e-3  # QP solver tolerance
 
-        if self.costs["cost_type"] == "linear":
+        if self.costs.cost_type == "linear":
+            # Linear LS: J = || Vx * (x - x_ref) ||_W^2 + || Vu * (u - u_ref) ||_W^2
+            # J_e = || Vx_e * (x - x_ref) ||^2
+            # Update y_ref and y_ref_e at each iteration, if needed
             ocp.cost.cost_type = "LINEAR_LS"
             ocp.cost.cost_type_e = "LINEAR_LS"
-            ocp.cost.W = scipy.linalg.block_diag(self.costs["Qs"], self.costs["R"])
-            ocp.cost.W_e = self.costs["Qt"]
+            ocp.cost.W = scipy.linalg.block_diag(self.costs.Qs, self.costs.R)
+            ocp.cost.W_e = self.costs.Qt
+            # Dummy reference trajectory
             ocp.cost.yref = np.zeros((self.ny,))
             ocp.cost.yref_e = np.zeros((self.nx,))
+
             Vx = np.zeros((self.ny, self.nx))
             Vx[: self.nx, : self.nx] = np.eye(self.nx)
+            ocp.cost.Vx = Vx
+
+            ocp.cost.Vx_e = np.eye(self.nx)
+
             Vu = np.zeros((self.ny, self.nu))
             Vu[self.nx :, :] = np.eye(self.nu)
-            ocp.cost.Vx = Vx
-            ocp.cost.Vx_e = np.eye(self.nx)
             ocp.cost.Vu = Vu
-        elif self.costs["cost_type"] == "nonlinear":
+        elif self.costs.cost_type == "nonlinear":
             raise NotImplementedError("Nonlinear cost functions are not implemented yet.")
             # ocp.cost.cost_type = "NONLINEAR_LS"
             # ocp.cost.cost_type_e = "NONLINEAR_LS"
             # ocp.model.cost_y_expr = self.costs["cost_fcn"]
             # ocp.cost_expr_e = self.costs["cost_fcn"]
-        elif self.costs["cost_type"] == "external":
+        elif self.costs.cost_type == "external":
             ocp.cost.cost_type = "EXTERNAL"
             ocp.cost.cost_type_e = "EXTERNAL"
-            ocp.model.cost_expr_ext_cost = self.costs["cost_fcn"](
-                ocp.model.x, ocp.model.u, ocp.model.p
+            ocp.model.cost_expr_ext_cost = self.costs.stageCostFunc(
+                ocp.model.x, ocp.model.u, ocp.model.p[self.dynamics.param_indices["cost"]]
             )
-            ocp.model.cost_expr_ext_cost_e = self.costs["cost_fcn"](
-                ocp.model.x, np.zeros((self.nu, 1)), ocp.model.p
+            ocp.model.cost_expr_ext_cost_e = self.costs.terminalCostFunc(
+                ocp.model.x, ocp.model.p[self.dynamics.param_indices["cost"]]
             )
         else:
             raise NotImplementedError("cost_type must be linear, nonlinear, or external.")
 
         # Set Basic bounds
         ocp.constraints.idxbu = np.arange(self.nu)
-        ocp.constraints.lbu = self.dynamics.u_lb.reshape(self.nu)
-        ocp.constraints.ubu = self.dynamics.u_ub.reshape(self.nu)
+        ocp.constraints.lbu = self.dynamics.u_lb
+        ocp.constraints.ubu = self.dynamics.u_ub
 
         ocp.constraints.idxbx = np.arange(self.nx)
-        ocp.constraints.lbx = self.dynamics.x_lb.reshape(self.nx)
-        ocp.constraints.ubx = self.dynamics.x_ub.reshape(self.nx)
+        ocp.constraints.lbx = self.dynamics.x_lb
+        ocp.constraints.ubx = self.dynamics.x_ub
 
         ocp.constraints.idxbx_0 = ocp.constraints.idxbx
         ocp.constraints.lbx_0 = ocp.constraints.lbx
@@ -377,41 +359,50 @@ class AcadosOptimizer(BaseOptimizer):
         ocp.constraints.idxbx_e = ocp.constraints.idxbx
         ocp.constraints.lbx_e = ocp.constraints.lbx
         ocp.constraints.ubx_e = ocp.constraints.ubx
+        # Set soft constraints
         if self.useSoftConstraints:
             # Define the penalty matrices Zl and Zu
             norm2_penalty = self.softPenalty
             norm1_penalty = self.softPenalty
+            # upperSlackBounds are 1 by default, optimize if needed
 
             # Define slack variables
-            ocp.constraints.idxsbx = np.arange(self.nx)
-            ocp.constraints.lsbx = np.zeros((self.nx,))
-            ocp.constraints.usbx = np.ones((self.nx,))
+            ocp.constraints.idxsbx = np.setdiff1d(np.arange(self.nx), self.dynamics.noSlackStates)
+            nsx = len(ocp.constraints.idxsbx)
+            ocp.constraints.lsbx = np.zeros((nsx,))
+            ocp.constraints.usbx = np.ones((nsx,))
 
-            ocp.constraints.idxsbu = np.arange(self.nu)
-            ocp.constraints.lsbu = np.zeros((self.nu,))
-            ocp.constraints.usbu = np.ones((self.nu,))
+            ocp.constraints.idxsbx_e = ocp.constraints.idxsbx
+            ocp.constraints.lsbx_e = ocp.constraints.lsbx
+            ocp.constraints.usbx_e = ocp.constraints.usbx
 
-            ocp.constraints.idxsbx_e = np.arange(self.nx)
-            ocp.constraints.lsbx_e = np.zeros((self.nx,))
-            ocp.constraints.usbx_e = np.ones((self.nx,))
+            ocp.constraints.idxsbu = np.setdiff1d(np.arange(self.nu), self.dynamics.noSlackControls)
+            nsu = len(ocp.constraints.idxsbu)
+            ocp.constraints.lsbu = np.zeros((nsu,))
+            ocp.constraints.usbu = np.ones((nsu,))
 
-            ocp.cost.Zl = norm2_penalty * np.ones(self.ny)
-            ocp.cost.Zu = norm2_penalty * np.ones(self.ny)
-            ocp.cost.zl = norm1_penalty * np.ones(self.ny)
-            ocp.cost.zu = norm1_penalty * np.ones(self.ny)
+            nsy = nsx + nsu
+            ocp.cost.Zl = norm2_penalty * np.ones((nsy,))
+            ocp.cost.Zu = norm2_penalty * np.ones((nsy,))
+            ocp.cost.zl = norm1_penalty * np.ones((nsy,))
+            ocp.cost.zu = norm1_penalty * np.ones((nsy,))
 
-            ocp.cost.Zl_e = norm2_penalty * np.ones(self.nx)
-            ocp.cost.Zu_e = norm2_penalty * np.ones(self.nx)
-            ocp.cost.zl_e = norm1_penalty * np.ones(self.nx)
-            ocp.cost.zu_e = norm1_penalty * np.ones(self.nx)
+            ocp.cost.Zl_e = norm2_penalty * np.ones((nsx,))
+            ocp.cost.Zu_e = norm2_penalty * np.ones((nsx,))
+            ocp.cost.zl_e = norm1_penalty * np.ones((nsx,))
+            ocp.cost.zu_e = norm1_penalty * np.ones((nsx,))
 
-            ocp.cost.Zl_0 = norm2_penalty * np.ones(self.nu)
-            ocp.cost.Zu_0 = norm2_penalty * np.ones(self.nu)
-            ocp.cost.zl_0 = norm1_penalty * np.ones(self.nu)
-            ocp.cost.zu_0 = norm1_penalty * np.ones(self.nu)
+            ocp.cost.Zl_0 = norm2_penalty * np.ones((nsu,))
+            ocp.cost.Zu_0 = norm2_penalty * np.ones((nsu,))
+            ocp.cost.zl_0 = norm1_penalty * np.ones((nsu,))
+            ocp.cost.zu_0 = norm1_penalty * np.ones((nsu,))
         # Set initial state (not required and should not be set for moving horizon estimation)
         # ocp.constraints.x0 = self.x0
-        ocp = self.initConstraints(ocp, self.constraints)
+        # Set nonlinear constraints
+        ocp.model.con_h_expr = self.dynamics.nl_constr
+        ocp.constraints.lh = self.dynamics.nl_constr_lh
+        ocp.constraints.uh = self.dynamics.nl_constr_uh
+        ocp.parameter_values = self.dynamics.param_values
 
         if self.useZoro:
             raise NotImplementedError("Zoro not implemented yet.")
@@ -424,8 +415,8 @@ class AcadosOptimizer(BaseOptimizer):
                 ocp=self.ocp, residual_model=self.residual_model, use_cython=True
             )
         else:
-            self.ocp_solver = AcadosOcpSolver(self.ocp)
-        self.ocp_integrator = AcadosSimSolver(self.ocp)
+            self.ocp_solver = AcadosOcpSolver(self.ocp, self.json_file)
+        # self.ocp_integrator = AcadosSimSolver(self.ocp)
 
     def step(
         self,
@@ -435,14 +426,10 @@ class AcadosOptimizer(BaseOptimizer):
         u_ref: NDArray[np.floating],
     ) -> NDArray[np.floating]:
         """Performs one optimization step using the current state, reference trajectory, and the previous solution for warmstarting. Updates the previous solution and returns the control input."""
-        if self.x_last is None:
-            u_last = self.dynamics.u_eq
-        else:
-            u_last = self.x_last[self.nx - self.nu : self.nx, 1]
+        # Transform the state and update the parameters
+        current_state = self.dynamics.transformState(current_state)
+        self.updateParameters(obs)
 
-        current_state = self.dynamics.transformState(current_state, last_u=u_last)
-        if self.constraints.dict["obstacle"] is not None:
-            self.updateObstacleConstraints(obs)
         # Set initial state
         self.ocp_solver.set(0, "lbx", current_state)
         self.ocp_solver.set(0, "ubx", current_state)
@@ -494,39 +481,27 @@ class AcadosOptimizer(BaseOptimizer):
         self.u_guess[:, :-1] = self.u_last[:, 1:]
 
         # Extract the control input
-        if self.useMellinger:
-            action = self.ocp_solver.get(1, "x")
-            action = self.dynamics.transformAction(action)
-        else:
-            action = self.ocp_solver.get(0, "u")
+        action = self.dynamics.transformAction(self.x_last, self.u_last)
         self.last_action = action
         return action
 
-    def initConstraints(self, ocp: AcadosOcp, constraints) -> AcadosOcp:
-        """Initialize the constraints."""
-        ocp.model.con_h_expr = self.dynamics.obstacle_constraints
-        ocp.constraints.lh = self.dynamics.obstacle_constraints_lh
-        ocp.constraints.uh = self.dynamics.obstacle_constraints_uh
-        # if constraints.dict["obstacle"] is not None:
-        #     ocp.model.con_h_expr = constraints.dict["obstacle"]["expr"]
-        #     ocp.constraints.lh = constraints.dict["obstacle"]["lh"]
-        #     ocp.constraints.uh = constraints.dict["obstacle"]["uh"]
-        #     ocp.parameter_values = np.zeros(constraints.dict["obstacle"]["param"].shape)
-        # if constraints.dict["goal"] is not None:
-        #     NotImplementedError("Goal constraints not implemented yet.")
-        # if constraints.dict["gate"] is not None:
-        #     NotImplementedError("Gate constraints not implemented yet.")
-        return ocp
-
-    def updateObstacleConstraints(self, obs):
+    def updateParameters(self, obs):
         """Update the obstacle constraints based on the current obstacle positions."""
-        if np.array_equal(
-            obs["obstacles_in_range"], self.constraints.dict["obstacle"]["obstacle_in_range"]
-        ):
-            return None
-        self.constraints.dict["obstacle"]["obstacle_in_range"] = obs["obstacles_in_range"]
-        params = obs["obstacles_pos"].flatten()
-        # print("Updating obstacle constraints: Param Shape: ", params.shape)
-        for stage in range(self.n_horizon):
+        params = self.dynamics.param_values
+
+        # Update obstacle constraints
+        obstacles_visited = obs.get("obstacles_visited", self.dynamics.obstacle_visited)
+        if np.array_equal(obstacles_visited, self.dynamics.obstacle_visited):
+            pass
+        else:
+            self.dynamics.obstacle_visited = obstacles_visited
+            self.dynamics.obstacle_pos = obs.get("obstacles_pos", self.dynamics.obstacle_pos)
+
+        params[self.dynamics.param_indices["p_obst"]] = self.dynamics.obstacle_pos.flatten()
+
+        # Update the parameters in the solver
+        for stage in range(self.n_horizon + 1):
             self.ocp_solver.set(stage, "p", params)
+        # Update the parameter values in the dynamics model
+        self.dynamics.param_values = params
         return None

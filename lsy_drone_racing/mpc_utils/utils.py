@@ -6,6 +6,55 @@ import casadi as ca
 import numpy as np
 
 
+def shuffleQuat(q: ca.MX) -> ca.MX:
+    """Shuffle the quaternion from [qw, qx, qy, qz ] to [qx, qy, qz,qw]."""
+    return ca.vertcat(q[1], q[2], q[3], q[0])
+
+
+def quaternion_conjugate(q: ca.MX) -> ca.MX:
+    """Compute the conjugate of a quaternion [qx,qy,qz,qw]."""
+    return ca.vertcat(-q[0], -q[1], -q[2], q[3])
+
+
+def quaternion_rotation(q: ca.MX, v: ca.MX) -> ca.MX:
+    """Rotate a vector by a quaternion [qx,qy,qz,qw]."""
+    t = 2 * ca.cross(q[:-1], v)
+    return v + q[-1] * t + ca.cross(q[:-1], t)
+
+
+def quaternion_product(q: ca.MX, r: ca.MX) -> ca.MX:
+    """Compute the product of two quaternions."""
+    qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+    rx, ry, rz, rw = r[0], r[1], r[2], r[3]
+    return ca.vertcat(
+        qw * rx + qx * rw + qy * rz - qz * ry,
+        qw * ry - qx * rz + qy * rw + qz * rx,
+        qw * rz + qx * ry - qy * rx + qz * rw,
+        qw * rw - qx * rx - qy * ry - qz * rz,
+    )
+
+
+def quaternion_to_euler(quat: ca.MX) -> ca.MX:
+    """Convert a quaternion [qx, qy, qz, qw] to Euler angles [roll, pitch, yaw]."""
+    qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
+
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (qw * qx + qy * qz)
+    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+    roll = ca.atan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2 * (qw * qy - qz * qx)
+    pitch = ca.arcsin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (qw * qz + qx * qy)
+    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+    yaw = ca.atan2(siny_cosp, cosy_cosp)
+
+    return ca.vertcat(roll, pitch, yaw)
+
+
 def R_body_to_inertial(rpy: Union[np.ndarray, ca.SX]) -> Union[np.ndarray, ca.SX]:
     """Compute the rotation matrix from body frame to inertial frame.
 
