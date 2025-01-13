@@ -26,6 +26,7 @@ from lsy_drone_racing.mpc_utils.utils import (
     quaternion_product,
     quaternion_rotation,
     quaternion_to_euler,
+    quaternion_to_rotation_matrix,
 )
 
 
@@ -45,8 +46,10 @@ class BaseDynamics(ABC):
             "useAngVel": True,  # Currently only supports True, False if deul_ang is used instead of w
             "useControlRates": False,  # True if u is used as state and du as control
             "Constraints": {"Obstacles": True, "Gates": False},
-            "usePredict": True,  # True if the dynamics are predicted into the future
+            "usePredict": False,  # True if the dynamics are predicted into the future
             "t_predict": 0.05,  # in [s] To compensate control delay, the optimization problem is solved for the current state shifted by t_predict into the future with the current controls
+            "OnlyBaseInit": False,  # True if only the basic initialization is required
+            "useDrags": False,  # True if the drag forces are included in the dynamics
         },
     ):
         """Initialization of the dynamics constraints.
@@ -116,29 +119,39 @@ class BaseDynamics(ABC):
         if not self.useAngVel:
             self.useAngVel = True
             raise Warning("Currently only useAngVel=True is supported.")
+
+        self.useDrags = dynamics_info.get("useDrags", False)
+
         # Constraints
         self.useObstacleConstraints = dynamics_info.get("Constraints", {}).get("Obstacles", True)
+        # if self.useObstacleConstraints:
+        self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
+        self.obstacle_diameter = self.initial_info.get("obstacle_diameter", 0.1)
+        self.obstacle_visited = self.initial_obs.get("obstacle_visited", np.zeros((4,)))
+        self.gate_pos = self.initial_obs.get("gates_pos", np.zeros((4, 3)))
+        self.gate_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
+        self.gate_visited = self.initial_obs.get("gates_visited", np.zeros((4,)))
         self.useGateConstraints = dynamics_info.get("Constraints", {}).get("Gates", False)
+        self.last_u = None  # Used for the control rates and the prediction
 
         # Setup basic parameters, dynamics, bounds, scaling, and constraints
         self.setupNominalParameters()
         self.setupBaseBounds()
-        if self.baseDynamics == "Euler":
-            self.baseEulerDynamics()
-        elif self.baseDynamics == "Quaternion":
-            self.baseQuaternionDynamics()
-        self.setupBoundsAndScals()
-
-        self.current_param_index = 0
-        self.param_indices = {}
-        self.current_nl_constr_index = 0
-        self.nl_constr_indices = {}
-        self.nl_constr = None
-        self.setupBaseConstraints()
-        # self.setupBaseCosts()
-        self.initParamValues()
-        self.setupCasadiFunctions()
-        self.last_u = None  # Used for the control rates and the prediction
+        if not dynamics_info.get("OnlyBaseInit", False):
+            if self.baseDynamics == "Euler":
+                self.baseEulerDynamics()
+            elif self.baseDynamics == "Quaternion":
+                self.baseQuaternionDynamics()
+            self.setupBoundsAndScals()
+            self.current_param_index = 0
+            self.param_indices = {}
+            self.current_nl_constr_index = 0
+            self.nl_constr_indices = {}
+            self.nl_constr = None
+            self.setupBaseConstraints()
+            # self.setupBaseCosts()
+            self.initParamValues()
+            self.setupCasadiFunctions()
 
     def transformState(self, x: np.ndarray) -> np.ndarray:
         """Transforms observations from the environment to the respective states used in the dynamics."""
@@ -246,6 +259,7 @@ class BaseDynamics(ABC):
                 [self.cd, -self.cd, self.cd, -self.cd],
             ]
         )
+        self.DragMat = np.diag([self.cd, self.cd, self.cd])
 
         # self.obstacles_pos = self.initial_obs.get("obstacles_pos", np.zeros((6, 3)))
         # self.obstacles_in_range = self.initial_obs.get("obstacles_in_range", np.zeros((6,)))
@@ -375,9 +389,17 @@ class BaseDynamics(ABC):
                 self.gamma * (f[0] - f[1] + f[2] - f[3]),
             )  # tau_x, tau_y, tau_z
             thrust_total = ca.vertcat(0, 0, ca.sum1(f) / self.mass)
+        Rquat = quaternion_to_rotation_matrix(quat)
 
         dpos = vel
-        dvel = self.gv + quaternion_rotation(quat, thrust_total)
+        if self.useDrags:
+            dvel = (
+                self.gv
+                + quaternion_rotation(quat, thrust_total)
+                - ca.mtimes(Rquat, self.DragMat, Rquat.T, vel)
+            )
+        else:
+            dvel = self.gv + quaternion_rotation(quat, thrust_total)
         dquat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
         dw = self.J_inv @ (torques - (ca.skew(w) @ self.J @ w))
 
@@ -602,115 +624,6 @@ class BaseDynamics(ABC):
             self.u_scal = np.where(np.abs(self.u_scal) < 1e-4, 0.1, self.u_scal)
 
 
-class ThrustTimeDynamics(BaseDynamics):
-    def __init__(self, initial_obs, initial_info, dynamics_info=None):
-        super().__init__(initial_obs, initial_info, dynamics_info)
-        if not self.useAngVel:
-            Warning("Time Dynamics uses angular velocity")
-            self.useAngVel = True
-        if self.useControlRates:
-            Warning("Time Dynamics does not use control rates")
-            self.useControlRates = False
-        self.setup_dynamics()
-        self.nx = self.x.size()[0]
-        self.nu = self.u.size()[0]
-        self.ny = self.nx + self.nu
-        self.setupBoundsAndScals()
-        super().setupCasadiFunctions()
-        super().setupObstacleConstraints()
-
-    def setup_dynamics(self):
-        self.modelName = "ThrustEulerTime"
-        # Define the state variables
-        pos = ca.MX.sym("pos", 3)
-        vel = ca.MX.sym("vel", 3)
-        eul_ang = ca.MX.sym("eul_ang", 3)
-        w = ca.MX.sym("w", 3)
-        t = ca.MX.sym("t", 1)
-        gate_passed = ca.MX.sym("gate_passed", 1)
-        # Combine state variables into a single vector
-        x = ca.vertcat(pos, vel, eul_ang, w, t)
-        self.x_eq = np.zeros((14,))
-        # Create a dictionary for indexing
-        self.state_indices = {
-            "pos": np.arange(0, 3),
-            "vel": np.arange(3, 6),
-            "eul_ang": np.arange(6, 9),
-            "w": np.arange(9, 12),
-            "time": 12,
-            "gate_passed": 13,
-        }
-
-        # Define the control variables
-        u = ca.MX.sym("f", 4)  # [f1, f2, f3, f4]
-        eq = 0.25 * self.mass * self.g
-        self.u_eq = eq * np.ones((4,))
-
-        # Define helper variables
-        thrust_total = (u[0] + u[1] + u[2] + u[3]) / self.mass
-        beta = self.arm_length / ca.sqrt(2.0)
-        torques = ca.vertcat(
-            beta * (u[0] + u[1] - u[2] - u[3]),
-            beta * (-u[0] + u[1] + u[2] - u[3]),
-            self.gamma * (u[0] - u[1] + u[2] - u[3]),
-        )
-        # Define the distance to the next gate
-        distance_to_next_gate = ca.norm_2(
-            ca.vertcat(pos, eul_ang) - self.p[self.param_indices["next_gate"]]
-        )
-        # Once the distance is less than 0.05, the gate is considered passed and the gate passed variable increases
-        gate_passed_update = ca.if_else(distance_to_next_gate < 0.05, 1 / self.ts, 0)
-        # In cost function, it is checked if the gate passed variable is greater than 0 to determine which gate is the next one
-        # The gate passed variable is reset to 0 in each iteration
-        # Define the dynamics
-        dx = ca.vertcat(
-            vel,  # Linear velocity
-            ca.vertcat(0, 0, -self.g)
-            + Rbi(eul_ang[0], eul_ang[1], eul_ang[2])
-            @ ca.vertcat(0, 0, thrust_total),  # Linear acceleration
-            W2s(eul_ang) @ w,  # Angular velocity
-            self.J_inv @ (torques - (ca.skew(w) @ self.J @ w)),  # Angular acceleration
-            1,  # Time derivative
-            gate_passed_update,  # Gate passed update
-        )
-
-        self.x = x
-        self.dx = dx
-        self.u = u
-
-    def setupBoundsAndScals(self):
-        x_lb = np.concatenate([self.pos_lb, self.vel_lb, self.eul_ang_lb, self.eul_rate_lb, [0]])
-        x_ub = np.concatenate([self.pos_ub, self.vel_ub, self.eul_ang_ub, self.eul_rate_ub, [1e9]])
-        u_lb = np.array([self.thrust_lb, self.thrust_lb, self.thrust_lb, self.thrust_lb])
-        u_ub = np.array([self.thrust_ub, self.thrust_ub, self.thrust_ub, self.thrust_ub])
-
-        self.x_lb = x_lb
-        self.x_ub = x_ub
-        self.x_scal = self.x_ub - self.x_lb
-        self.u_lb = u_lb
-        self.u_ub = u_ub
-        self.u_scal = self.u_ub - self.u_lb
-
-    def transformState(self, x, n_step):
-        w = W1(x[6:9]) @ x[9:12]
-        x = np.concatenate([x[:9], w.flatten(), [n_step * self.ts]])
-        self.current_state = x
-        return x
-
-    def transformAction(self, action):
-        """Transforms the solution of the MPC controller to the format required for the Mellinger interface."""
-        pos = action[:3]
-        vel = action[3:6]
-        eul_ang = action[6:9]
-        w = action[9:12]
-
-        # if self.useControlRates:
-        #     action = action[: -self.nu]
-        acc_world = (vel - self.current_state[3:6]) / self.ts
-        yaw = action[8]
-        return np.concatenate([pos, vel, acc_world, [yaw], w])
-
-
 class MPCCppDynamics(BaseDynamics):
     def __init__(
         self,
@@ -723,9 +636,21 @@ class MPCCppDynamics(BaseDynamics):
             "BaseDynamics": "Quaternion",  # Euler or Quaternion
             "useAngVel": True,  # Currently only supports True, False if deul_ang is used instead of w
             "useControlRates": True,  # True if u is used as state and du as control
+            "Constraints": {"Obstacles": True, "Gates": False},  # Obstacle and gate constraints
+            "OnlyBaseInit": True,  # Only setup the base dynamics and not the full dynamics
+            "IncludeDrags": False,  # Include drag forces in the dynamics
         },
     ):
         super().__init__(initial_obs, initial_info, dynamics_info)
+        # Setup the Dynamics
+        self.setup_dynamics()
+        # Setup bounds and scaling factors
+        self.setupBoundsAndScals()
+        # Setup nonlinear constraints
+        self.setupNLConstraints()
+        # Setup Optimization variables and parameters
+
+        # Last step
         super().setupCasadiFunctions()
 
     def setup_dynamics(self):
@@ -734,9 +659,24 @@ class MPCCppDynamics(BaseDynamics):
         vel = ca.MX.sym("vel", 3)  # velocity in world frame
         quat = ca.MX.sym("quat", 4)  # [qx, qy, qz,qw] quaternion rotation from body to world
         w = ca.MX.sym("w", 3)  # angular velocity in body frame
+        f = ca.MX.sym("f", 4)  # individual rotor thrusts
+        progress = ca.MX.sym("progress", 1)  # progress along the path
+        dprogress = ca.MX.sym("dprogress", 1)  # progress rate
+        x = ca.vertcat(pos, vel, quat, w, f, progress, dprogress)
+        self.state_indices = {
+            "pos": np.arange(0, 3),
+            "vel": np.arange(3, 6),
+            "quat": np.arange(6, 10),
+            "w": np.arange(10, 13),
+            "f": np.arange(13, 17),
+            "progress": np.arange(17, 18),
+            "dprogress": np.arange(18, 19),
+        }
 
-        u = ca.MX.sym("f", 4)  # individual rotor thrusts
-        du = ca.MX.sym("du", 4)  # individual rotor thrust rates
+        df = ca.MX.sym("df", 4)  # individual rotor thrust rates
+        ddprogress = ca.MX.sym("ddprogress", 1)  # progress rate
+        u = ca.vertcat(df, ddprogress)
+        self.control_indices = {"df": np.arange(0, 4), "ddprogress": np.arange(4, 5)}
 
         beta = self.arm_length / ca.sqrt(2.0)
         torques = ca.vertcat(
@@ -745,36 +685,145 @@ class MPCCppDynamics(BaseDynamics):
             self.gamma * (u[0] - u[1] + u[2] - u[3]),
         )  # tau_x, tau_y, tau_z
         thrust_total = ca.vertcat(0, 0, (u[0] + u[1] + u[2] + u[3]) / self.mass)
+        Rquat = quaternion_to_rotation_matrix(quat)
 
         # Define the dynamics
-        dpos = vel
-        dvel = self.gv + Rot.from_quat(quat).apply(thrust_total)
-        dquat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
-        dw = self.J_inv @ (torques - (ca.skew(w) @ self.J @ w))
-        du = du
-        x = ca.vertcat(pos, vel, quat, w, u)
-        self.state_indices = {
-            "pos": np.arange(0, 3),
-            "vel": np.arange(3, 6),
-            "quat": np.arange(6, 10),
-            "w": np.arange(10, 13),
-            "u": np.arange(13, 17),
-        }
-        dx = ca.vertcat(dpos, dvel, dquat, dw, du)
+        d_pos = vel
+        if self.useDrags:
+            d_vel = (
+                self.gv
+                + quaternion_rotation(quat, thrust_total)
+                - ca.mtimes(Rquat, self.DragMat, Rquat.T, vel)
+            )
+        else:
+            d_vel = self.gv + quaternion_rotation(quat, thrust_total)
+
+        d_quat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
+        d_w = self.J_inv @ (torques - (ca.skew(w) @ self.J @ w))
+        d_f = df
+        d_progress = dprogress
+        d_dprogress = ddprogress
+
+        dx = ca.vertcat(d_pos, d_vel, d_quat, d_w, d_f, d_progress, d_dprogress)
         self.x = x
         self.dx = dx
-        self.u = du
-        self.control_indices = {"du": np.arange(0, 4)}
+        self.u = u
 
-        u_eq = 0.25 * self.mass * self.g * np.ones((4,))
-        self.x_eq = np.concatenate([np.zeros(13), u_eq])  # Equilibrium state
-        self.u_eq = np.zeros((4,))  # Equilibrium control
+        f_eq = 0.25 * self.mass * self.g * np.ones((4,))
+        self.x_eq = np.concatenate([np.zeros((13,)), f_eq, np.zeros((2,))])  # Equilibrium state
+        self.u_eq = np.zeros((5,))  # Equilibrium control
+
+    def setupNLConstraints(self):
+        pos = self.x[self.state_indices["pos"]]
+        progress = self.x[self.state_indices["progress"]]
+        quat = self.x[self.state_indices["quat"]]
+        lh = 0
+        uh = 1e9
+        constraints = []
+        self.param_indices = {}
+        self.current_param_index = 0
+        # Quaternion constraints (norm = 1)
+        quat_norm = ca.norm_2(quat) - 1  # Ensure quaternion is normalized
+        constraints.append(quat_norm)
+        constraints_lh = np.zeros((1,))  # Lower bound for normalization constraint
+        constraints_uh = np.zeros((1,))  # Upper bound for normalization constraint
+        # Quaternion constraints (euler angle bounds)
+        quat_eul = quaternion_to_euler(quat)
+        constraints.append(quat_eul)
+        constraints_lh = np.concatenate([constraints_lh, self.eul_ang_lb])
+        constraints_uh = np.concatenate([constraints_uh, self.eul_ang_ub])
+
+        # Obstacle constraints
+        num_obstacles = self.obstacle_pos.shape[0]
+        num_params_per_obstacle = 2  # x, y
+        num_params_obstacle = num_obstacles * num_params_per_obstacle
+        p_obst = ca.MX.sym("p_obst", num_params_obstacle)
+        self.p = p_obst
+        self.param_indices["p_obst"] = np.arange(self.current_param_index, p_obst.size()[0])
+        self.current_param_index += p_obst.size()[0]
+        for k in range(num_obstacles):
+            constraints.append(
+                ca.norm_2(
+                    pos[:num_params_per_obstacle]
+                    - p_obst[k * num_params_per_obstacle : (k + 1) * num_params_per_obstacle]
+                )
+                - self.obstacle_diameter
+            )
+        constraints_lh = np.concatenate([constraints_lh, np.zeros((num_obstacles,))])
+        constraints_uh = np.concatenate([constraints_uh, np.ones((num_obstacles,)) * uh])
+
+        # Progress constraints
+
+        # Tunnel constraints
+        Wn = self.Wn  # Nominal tunnel width = tunnel height
+        Wgate = self.Wgate  # Tunnel width = tunnel height at the gate
+        num_gates = self.gate_pos.size()[0]
+        # Paremeter for the progress of the gates
+        p_gate_progress = ca.MX.sym("gate_progress", num_gates)
+
+        def getTunnelWidth(gate_progress: ca.MX, progress: ca.MX) -> ca.MX:
+            """Calculate the tunnel width at the current progress."""
+            # Calculate the progress distance to the nearest gate
+            d = ca.fmin(ca.fabs(gate_progress - progress))
+            # Return the tunnel width (and height)
+            return Wn + (Wgate - Wn) / (1 + ca.exp(-d))
+
+        W = getTunnelWidth(p_gate_progress, progress)
+        H = W  # Assuming W(θk) = H(θk)
+        # Parameters for the reference frame of the tunnels
+        # ref_frame(theta) = [t(theta), n(theta), b(theta)] = 3 x 3 matrix
+        p_ref_frame = ca.MX.sym("ref_frame", (3, 3))
+        p_pd = ca.MX.sym("pd", 3)  # Centerline of the tunnel
+        # t = self.tangent_vector(progress)
+        # n = self.normal_vector(progress)
+        # b = self.binormal_vector(progress)s
+        # pd = self.centerline(progress)
+        p0 = p_pd - W * p_ref_frame[:, 1] - H * p_ref_frame[:, 2]
+        # Tunnel constraints
+        constraints.append((pos - p0).T @ p_ref_frame[:, 1])
+        constraints.append(2 * H - (pos - p0).T @ p_ref_frame[:, 1])
+        constraints.append((pos - p0).T @ p_ref_frame[:, 2])
+        constraints.append(2 * W - (pos - p0).T @ p_ref_frame[:, 2])
+
+        constraints_lh = np.concatenate([constraints_lh, np.zeros((4,))])
+        constraints_uh = np.concatenate([constraints_uh, np.ones((4,)) * uh])
+
+        self.p = ca.vertcat(self.p, p_gate_progress, p_ref_frame, p_pd)
+        self.param_indices["p_gate_progress"] = np.arange(
+            self.current_param_index, p_gate_progress.size()[0]
+        )
+        self.current_param_index += p_gate_progress.size()[0]
+        self.param_indices["p_ref_frame"] = np.arange(
+            self.current_param_index, p_ref_frame.size()[0]
+        )
+        self.current_param_index += p_ref_frame.size()[0]
+        self.param_indices["p_pd"] = np.arange(self.current_param_index, p_pd.size()[0])
+        self.current_param_index += p_pd.size()[0]
+
+        # Combine constraints into a single vector
+        self.param_values = np.zeros((self.p.size()[0],))
+        self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+        self.nl_constr = ca.vertcat(*constraints)
+        self.nl_constr_lh = constraints_lh
+        self.nl_constr_uh = constraints_uh
 
     def setupBoundsAndScals(self):
-        x_lb = np.concatenate([self.pos_lb, self.vel_lb, self.quat_lb, self.w_lb, self.thrust_lb])
-        x_ub = np.concatenate([self.pos_ub, self.vel_ub, self.quat_ub, self.w_ub, self.thrust_ub])
-        u_lb = self.thrust_rate_lb
-        u_ub = self.thrust_rate_ub
+        x_lb = np.concatenate(
+            [self.pos_lb, self.vel_lb, self.quat_lb, self.w_lb, self.thrust_lb, [0, 0]]
+        )
+        x_ub = np.concatenate(
+            [self.pos_ub, self.vel_ub, self.quat_ub, self.w_ub, self.thrust_ub, [1, 1]]
+        )
+        u_lb = np.concatenate([self.thrust_rate_lb, [-1]])
+        u_ub = np.concatenate([self.thrust_rate_lb, [1]])
+
+        self.slackStates = np.concatenate(
+            [
+                self.state_indices["pos"],
+                self.state_indices["progress"],
+                self.state_indices["dprogress"],
+            ]
+        )
         self.noSlackStates = np.diff1d(
             np.arange(0, len(x_lb), 1),
             np.concatenate(
@@ -783,6 +832,9 @@ class MPCCppDynamics(BaseDynamics):
                 self.state_indices["vel"],
                 self.state_indices["pos"][:-1],
             ),  # no slack for thurst, vel, w, pos_x, pos_y
+        )
+        self.slackControls = np.concatenate(
+            [self.control_indices["df"], self.control_indices["ddprogress"]]
         )
         self.noSlackControls = np.diff1d(
             np.arange(0, len(u_lb), 1), []

@@ -34,6 +34,22 @@ def quaternion_product(q: ca.MX, r: ca.MX) -> ca.MX:
     )
 
 
+def quaternion_to_rotation_matrix(q: ca.MX) -> ca.MX:
+    """Convert a quaternion [qx, qy, qz, qw] to a rotation matrix."""
+    qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+    R = ca.MX(3, 3)
+    R[0, 0] = 1 - 2 * (qy**2 + qz**2)
+    R[0, 1] = 2 * (qx * qy - qz * qw)
+    R[0, 2] = 2 * (qx * qz + qy * qw)
+    R[1, 0] = 2 * (qx * qy + qz * qw)
+    R[1, 1] = 1 - 2 * (qx**2 + qz**2)
+    R[1, 2] = 2 * (qy * qz - qx * qw)
+    R[2, 0] = 2 * (qx * qz - qy * qw)
+    R[2, 1] = 2 * (qy * qz + qx * qw)
+    R[2, 2] = 1 - 2 * (qx**2 + qy**2)
+    return R
+
+
 def quaternion_to_euler(quat: ca.MX) -> ca.MX:
     """Convert a quaternion [qx, qy, qz, qw] to Euler angles [roll, pitch, yaw]."""
     qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
