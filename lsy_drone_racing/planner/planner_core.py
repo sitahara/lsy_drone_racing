@@ -179,18 +179,26 @@ class PlannerCore:
             `True` if the sampled points of the path are free from collisions,
             `False` if there is any collision.
         """
-        col_num = 0
-        for i in range(len(ob)):
-            d = np.array(
-                [
-                    ((ix - ob[i][0]) ** 2 + (iy - ob[i][1]) ** 2) - ob[i][2] ** 2
-                    for (ix, iy) in zip(fp.x, fp.y)
-                ]
-            )
+        # Convert path points to numpy arrays
+        fp_x = np.array(fp.x)
+        fp_y = np.array(fp.y)
 
-            collision = np.sum(d <= 0)
-            col_num += collision
-        return col_num
+        # Convert obstacle list to numpy array for vectorized operations
+        ob_array = np.array(ob)
+
+        # Calculate the squared distances from path points to obstacle centers
+        dx = fp_x[:, np.newaxis] - ob_array[:, 0]
+        dy = fp_y[:, np.newaxis] - ob_array[:, 1]
+        distances_squared = dx**2 + dy**2
+
+        # Calculate the squared collision distances
+        collision_distances_squared = (ob_array[:, 2] / 2 + self.margin_dist) ** 2
+
+        # Check for collisions
+        collisions = np.sum(distances_squared <= collision_distances_squared, axis=0)
+
+        # Return the number of collisions
+        return np.sum(collisions)
 
     def check_paths(
         self, fplist: List[FrenetPath], ob: List[Tuple[float, float, float]]
