@@ -22,6 +22,7 @@ class PlannerCore:
         T_PRED: float = 1.0,
         K_J: float = 0.5,
         K_D: float = 5.0,
+        USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
     ):
         """Initialize planning parameters.
@@ -42,6 +43,9 @@ class PlannerCore:
                 Weight constant for the trajectory's rate of change of acceleration (jerk).
             K_D:
                 Weight constant for the terminal deviation from the desired trajectory.
+            USE_QUINTIC_SPLINE:
+                If True, uses quintic spline curve as the candidate trajectory in frenet frame.
+                Otherwise uses lines
             DEBUG:
                 Enables or disables output of some parameters to the console.
         """
@@ -55,6 +59,9 @@ class PlannerCore:
         # Cost weights
         self.K_J = K_J
         self.K_D = K_D
+
+        # Planner configuration
+        self.USE_QUINTIC_SPLINE = USE_QUINTIC_SPLINE
 
         # debug
         self.DEBUG = DEBUG
@@ -97,8 +104,11 @@ class PlannerCore:
             # Lateral motion planning
             fp = FrenetPath()
 
-            # lat_qp = QuinticSpline_2D(self.T_PRED, d0, 0.0, 0.0, di)
-            lat_qp = Line_2D(self.T_PRED, d0, di)
+            lat_qp = None
+            if self.USE_QUINTIC_SPLINE is True:
+                lat_qp = QuinticSpline_2D(self.T_PRED, d0, 0.0, 0.0, di)
+            else:
+                lat_qp = Line_2D(self.T_PRED, d0, di)
 
             fp.t = np.array([t for t in np.arange(0.0, self.T_PRED, self.DT)])
             fp.d = np.array([lat_qp.calc_point(t) for t in fp.t])
