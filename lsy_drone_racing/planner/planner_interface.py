@@ -21,7 +21,7 @@ class Planner:
         MAX_ROAD_WIDTH: float = 1.0,
         D_ROAD_W: float = 0.1,
         DT: float = 0.05,
-        T_PRED: float = 1.0,
+        NUM_POINTS: int = 20,
         K_J: float = 0.5,
         K_D: float = 8.0,
         DEBUG: bool = False,
@@ -39,8 +39,8 @@ class Planner:
             Determines the width to sample the lateral offset of the trajectory in frenet frame.
         DT : float
             Sampling interval of the planned trajectory.
-        T_PRED : float
-            Length of the planned trajectory.
+        NUM_POINTS : int
+            Number of points included in the planned trajectory.
         K_J : float
             Weight constant for the trajectory's jerk.
         K_D : float
@@ -48,6 +48,9 @@ class Planner:
         DEBUG : bool
             Enables or disables display of planning information on a separate matplotlib window.
         """
+        # calculate prediction horizon based on the number of points
+        T_PRED = (NUM_POINTS) * DT
+
         self.planner_core = PlannerCore(
             MAX_CURVATURE=MAX_CURVATURE,
             MAX_ROAD_WIDTH=MAX_ROAD_WIDTH,
