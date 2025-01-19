@@ -16,12 +16,13 @@ class PlannerCore:
     def __init__(
         self,
         MAX_CURVATURE: float = 50.0,
-        MAX_ROAD_WIDTH: float = 0.5,
+        MAX_ROAD_WIDTH: float = 0.3,
         D_ROAD_W: float = 0.05,
         DT: float = 0.05,
         T_PRED: float = 1.0,
         K_J: float = 0.5,
         K_D: float = 5.0,
+        SAFETY_MARGIN: float = 0.05,
         USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
     ):
@@ -43,6 +44,8 @@ class PlannerCore:
                 Weight constant for the trajectory's rate of change of acceleration (jerk).
             K_D:
                 Weight constant for the terminal deviation from the desired trajectory.
+            SAFETY_MARGIN:
+                Planned trajectory tries to take this much margin from obstacles.
             USE_QUINTIC_SPLINE:
                 If True, uses quintic spline curve as the candidate trajectory in frenet frame.
                 Otherwise uses lines
@@ -59,6 +62,9 @@ class PlannerCore:
         # Cost weights
         self.K_J = K_J
         self.K_D = K_D
+
+        # Safety margin for obstacle avoidance
+        self.SAFETY_MARGIN = SAFETY_MARGIN
 
         # Planner configuration
         self.USE_QUINTIC_SPLINE = USE_QUINTIC_SPLINE
@@ -118,9 +124,11 @@ class PlannerCore:
 
             fp.s = fp.t + s0
 
+            # Setting up cost of candidates
+
             Jp = sum(np.power(fp.d_ddd, 2))  # Square of jerk
 
-            fp.cost = self.K_J * Jp + self.K_D * fp.d[-1] ** 2
+            fp.cost = self.K_J * Jp + self.K_D * fp.d[-1] ** 2  # Cost: Jerk and Terminal deviation
 
             frenet_paths.append(fp)
 
@@ -202,7 +210,7 @@ class PlannerCore:
         distances_squared = dx**2 + dy**2
 
         # Calculate the squared collision distances
-        collision_distances_squared = (ob_array[:, 2] / 2 + self.margin_dist) ** 2
+        collision_distances_squared = (ob_array[:, 2] / 2 + self.SAFETY_MARGIN) ** 2
 
         # Check for collisions
         collisions = np.sum(distances_squared <= collision_distances_squared, axis=0)
