@@ -12,7 +12,7 @@ import numpy as np
 from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation as Rot
-
+from lsy_drone_racing.mpc_utils.Planner.PathPlanner import PathPlanner, HermiteSplinePathPlanner
 from lsy_drone_racing.mpc_utils.utils import (
     W1,
     Rbi,
@@ -127,30 +127,39 @@ class BaseDynamics(ABC):
         # if self.useObstacleConstraints:
         self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
         self.obstacle_diameter = self.initial_info.get("obstacle_diameter", 0.1)
-        self.obstacle_visited = self.initial_obs.get("obstacle_visited", np.zeros((4,)))
-        self.gate_pos = self.initial_obs.get("gates_pos", np.zeros((4, 3)))
-        self.gate_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
-        self.gate_visited = self.initial_obs.get("gates_visited", np.zeros((4,)))
+        self.obstacles_visited = self.initial_obs.get("obstacles_visited", np.zeros((4,)))
+        self.gates_pos = self.initial_obs.get("gates_pos", np.zeros((4, 3)))
+        self.gates_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
+        self.gates_visited = self.initial_obs.get("gates_visited", np.zeros((4,)))
         self.useGateConstraints = dynamics_info.get("Constraints", {}).get("Gates", False)
         self.last_u = None  # Used for the control rates and the prediction
 
         # Setup basic parameters, dynamics, bounds, scaling, and constraints
         self.setupNominalParameters()
         self.setupBaseBounds()
+        # Casadi parameter vector for the optimization problem
+        self.param_values = None
+        self.p = None
+        # Dict that maps the parameter names to their indices
+        self.param_indices = {}
+        # Current index of the parameters
+        self.current_param_index = 0
+        # casadi vector of all non-linear constraints
+        self.nl_constr = None
+        # Dict of all non-linear constraints
+        self.nl_constr_indices = {}
+        # Current index of the non-linear constraints
+        self.current_nl_constr_index = 0
+
         if not dynamics_info.get("OnlyBaseInit", False):
             if self.baseDynamics == "Euler":
                 self.baseEulerDynamics()
             elif self.baseDynamics == "Quaternion":
                 self.baseQuaternionDynamics()
             self.setupBoundsAndScals()
-            self.current_param_index = 0
-            self.param_indices = {}
-            self.current_nl_constr_index = 0
-            self.nl_constr_indices = {}
-            self.nl_constr = None
-            self.setupBaseConstraints()
-            # self.setupBaseCosts()
-            self.initParamValues()
+            self.setupNLConstraints()
+            self.setupCosts()
+            self.updateParameters(init=True)
             self.setupCasadiFunctions()
 
     def transformState(self, x: np.ndarray) -> np.ndarray:
@@ -261,13 +270,8 @@ class BaseDynamics(ABC):
         )
         self.DragMat = np.diag([self.cd, self.cd, self.cd])
 
-        # self.obstacles_pos = self.initial_obs.get("obstacles_pos", np.zeros((6, 3)))
-        # self.obstacles_in_range = self.initial_obs.get("obstacles_in_range", np.zeros((6,)))
-        # self.gates_pos = self.initial_obs.get("gates_pos", np.zeros((6, 3)))
-        # self.gates_rpy = self.initial_obs.get("gates_rpy", np.zeros((6, 3)))
-        # self.gates_in_range = self.initial_obs.get("gates_in_range", np.zeros((6,)))
-
     def baseEulerDynamics(self):
+        """Setup the base Euler dynamics for the drone/environment controller."""
         self.modelName = self.controlType + self.baseDynamics + self.interface
         # States
         pos = ca.MX.sym("pos", 3)
@@ -346,6 +350,7 @@ class BaseDynamics(ABC):
         self.ny = self.nx + self.nu
 
     def baseQuaternionDynamics(self):
+        """Setup the base quaternion dynamics for the drone/environment controller."""
         self.modelName = self.controlType + self.baseDynamics + self.interface
         # States
         pos = ca.MX.sym("pos", 3)
@@ -426,61 +431,28 @@ class BaseDynamics(ABC):
         self.nu = self.u.size()[0]
         self.ny = self.nx + self.nu
 
-    def setupBaseConstraints(self):
-        """Setup the basic constraints for the drone/environment controller."""
-        # self.p = None
-        # self.param_indices = {}
-
+    def setupNLConstraints(self):
+        """Setup the basic constraints for the drone/environment controller. Each constraint setup appends the constraints to the existing constraints and extends the parameter vector when needed."""
         if self.baseDynamics == "Quaternion":
+            # Norm and euler angle constraints
             self.setupQuatConstraints()
-            # No parameters required for the quaternion constraints
-            if self.current_nl_constr_index == 0:
-                self.nl_constr = self.quat_constraints
-                self.nl_constr_lh = self.quat_constraints_lh
-                self.nl_constr_uh = self.quat_constraints_uh
-            else:
-                self.nl_constr = ca.vertcat(self.nl_constr, self.quat_constraints)
-                self.nl_constr_lh = np.concatenate([self.nl_constr_lh, self.quat_constraints_lh])
-                self.nl_constr_uh = np.concatenate([self.nl_constr_uh, self.quat_constraints_uh])
-            self.nl_constr_indices["quat"] = np.arange(
-                self.current_nl_constr_index, self.quat_constraints.size()[0]
-            )
-            self.current_nl_constr_index += self.quat_constraints.size()[0]
-
         if self.useObstacleConstraints:
+            # Obstacle constraints
             self.setupObstacleConstraints()
-            if self.current_param_index == 0:
-                self.p = self.p_obst
-            else:
-                self.p = ca.vertcat(self.p, self.p_obst)
-            self.param_indices["p_obst"] = np.arange(
-                self.current_param_index, self.p_obst.size()[0]
-            )
-            self.current_param_index += self.p_obst.size()[0]
-            if self.nl_constr is None:
-                self.nl_constr = self.obstacle_constraints
-                self.nl_constr_lh = self.obstacle_constraints_lh
-                self.nl_constr_uh = self.obstacle_constraints_uh
-            else:
-                self.nl_constr = ca.vertcat(self.nl_constr, self.obstacle_constraints)
-                self.nl_constr_lh = np.concatenate(
-                    [self.nl_constr_lh, self.obstacle_constraints_lh]
-                )
-                self.nl_constr_uh = np.concatenate(
-                    [self.nl_constr_uh, self.obstacle_constraints_uh]
-                )
-            self.nl_constr_indices["obstacles"] = np.arange(
-                self.current_nl_constr_index, self.obstacle_constraints.size()[0]
-            )
-            self.current_nl_constr_index += self.obstacle_constraints.size()[0]
 
-    def setupBaseCosts(self):
-        raise NotImplementedError
-
-    def initParamValues(self):
-        """Initialize the parameter values for the drone/environment controller."""
-        self.param_values = np.zeros((self.p.size()[0],))
-        self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+    def updateParameters(self, obs: dict = None, init: bool = False) -> np.ndarray:
+        """Update the parameters of the drone/environment controller."""
+        # Checks whether gate observation has been updated, replans if needed, and updates the path, dpath, and gate progresses parameters
+        if init:
+            self.param_values = np.zeros((self.p.size()[0],))
+            self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+        else:
+            if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
+                self.obstacles_visited = obs["obstacles_visited"]
+                self.obstacles_pos = obs["obstacles_pos"]
+                self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+            # Return the updated parameter values for the acados interface
+            return self.param_values
 
     def setupQuatConstraints(self):
         """Setup the quaternion constraints (normalization property and euler angle bounds)."""
@@ -494,33 +466,66 @@ class BaseDynamics(ABC):
         quat_eul_lh = self.eul_ang_lb
         quat_eul_uh = self.eul_ang_ub
 
-        # Combine constraints into a single vector
-        self.quat_constraints = ca.vertcat(quat_norm, quat_eul)
-        self.quat_constraints_lh = ca.vertcat(quat_norm_lh, quat_eul_lh)
-        self.quat_constraints_uh = ca.vertcat(quat_norm_uh, quat_eul_uh)
+        quat_constraints_lh = np.concatenate([quat_norm_lh, quat_eul_lh])
+        quat_constraints_uh = np.concatenate([quat_norm_uh, quat_eul_uh])
+        # Add the quat constraints to the the constraints
+        if self.nl_constr is None:
+            self.nl_constr = ca.vertcat(quat_norm, quat_eul)
+            self.nl_constr_lh = quat_constraints_lh
+            self.nl_constr_uh = quat_constraints_uh
+        else:
+            self.nl_constr = ca.vertcat(self.nl_constr, quat_norm, quat_eul)
+            self.nl_constr_lh = np.concatenate([self.nl_constr_lh, quat_constraints_lh])
+            self.nl_constr_uh = np.concatenate([self.nl_constr_uh, quat_constraints_uh])
+
+        self.nl_constr_indices["quat"] = np.arange(
+            self.current_nl_constr_index, quat_constraints_lh.size()[0]
+        )
+        self.current_nl_constr_index += quat_constraints_lh.size()[0]
+        # No parameters required for the quaternion constraints
 
     def setupObstacleConstraints(self):
         """Setup the obstacle constraints for the drone/environment controller."""
         # Obstacle constraints
-        self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
-        self.obstacle_diameter = self.initial_info.get("obstacle_diameter", 0.1)
-        self.obstacle_visited = self.initial_obs.get("obstacle_visited", np.zeros((4,)))
         num_obstacles = self.obstacle_pos.shape[0]
-        num_params_per_obstacle = 3
+        num_params_per_obstacle = 2
         num_params_obstacle = num_obstacles * num_params_per_obstacle
-        self.p_obst = ca.MX.sym("p_obst", num_params_obstacle)
+        # Parameters for the obstacle positions
+        p_obst = ca.MX.sym("p_obst", num_params_obstacle)
+        # Extract the position of the drone
+        pos = self.x[self.state_indices["pos"]]
         obstacle_constraints = []
         for k in range(num_obstacles):
             obstacle_constraints.append(
                 ca.norm_2(
-                    self.x[self.state_indices["pos"][:num_params_per_obstacle]]
-                    - self.p_obst[k * num_params_per_obstacle : (k + 1) * num_params_per_obstacle]
+                    pos[:num_params_per_obstacle]
+                    - p_obst[k * num_params_per_obstacle : (k + 1) * num_params_per_obstacle]
                 )
                 - self.obstacle_diameter
             )
-        self.obstacle_constraints = ca.vertcat(*obstacle_constraints)
-        self.obstacle_constraints_lh = np.zeros((num_obstacles,))
-        self.obstacle_constraints_uh = np.ones((num_obstacles,)) * 1e9
+
+        obstacle_constraints_lh = np.zeros((num_obstacles,))
+        obstacle_constraints_uh = np.ones((num_obstacles,)) * 1e9
+        # Add the obstacle constraints to the the constraints
+        if self.nl_constr is None:
+            self.nl_constr = ca.vertcat(*obstacle_constraints)
+            self.nl_constr_lh = obstacle_constraints_lh
+            self.nl_constr_uh = obstacle_constraints_uh
+        else:
+            self.nl_constr = ca.vertcat(self.nl_constr, *obstacle_constraints)
+            self.nl_constr_lh = np.concatenate([self.nl_constr_lh, obstacle_constraints_lh])
+            self.nl_constr_uh = np.concatenate([self.nl_constr_uh, obstacle_constraints_uh])
+
+        self.nl_constr_indices["obstacles"] = np.arange(
+            self.current_nl_constr_index, obstacle_constraints.size()[0]
+        )
+        self.current_nl_constr_index += obstacle_constraints.size()[0]
+        # Add the obstacle parameters to the parameter vector
+        self.p = ca.vertcat(self.p, p_obst) if self.p is not None else p_obst
+        self.param_indices["p_obst"] = np.arange(
+            self.current_param_index, self.current_param_index + num_params_obstacle
+        )
+        self.current_param_index += num_params_obstacle
 
     def setupBaseBounds(self):
         """Setup the nominal and unchanging bounds of the drone/environment controller."""
@@ -601,8 +606,8 @@ class BaseDynamics(ABC):
         self.x_lb = x_lb
         self.x_ub = x_ub
         self.x_scal = self.x_ub - self.x_lb
-        self.noSlackStates = np.concatenate(
-            [self.state_indices["pos"][:-1], self.state_indices["vel"]]
+        self.slackStates = np.concatenate(
+            self.state_indices["pos"], self.state_indices["w"]
         )  # Slack variables on z_pos, w, and quat
 
         if any(x_ub - x_lb < 0):
@@ -615,7 +620,7 @@ class BaseDynamics(ABC):
         self.u_ub = u_ub
         self.u_scal = self.u_ub - self.u_lb
 
-        self.noSlackControls = []  # All control bounds have slack variables
+        self.slackControls = np.arange(0, self.nu)  # All control bounds have slack variables
 
         if any(u_ub - u_lb < 0):
             Warning("Some controls have upper bounds lower than lower bounds")
@@ -640,21 +645,39 @@ class MPCCppDynamics(BaseDynamics):
             "OnlyBaseInit": True,  # Only setup the base dynamics and not the full dynamics
             "IncludeDrags": False,  # Include drag forces in the dynamics
         },
+        cost_info: dict = {
+            "Ql": 1,  # lag error weights,
+            "Qc": 1,  # contour error weights,
+            "Qw": 1,  # angular velocity weights,
+            "Qmu": 1,  # progress rate weights,
+            "Rdf": 0.1,  # rotor rate weights,
+            "Rdprogress": 0.1,  # progress rate weights,
+        },
     ):
+        self.cost_info = cost_info
         super().__init__(initial_obs, initial_info, dynamics_info)
-        # Setup the Dynamics
+        # Setup the Dynamics, returns expressions for the continuous dynamics
         self.setup_dynamics()
-        # Setup bounds and scaling factors
+        # Defines the bounds and scaling factors for the states and controls, and which states/controls have slack variables
         self.setupBoundsAndScals()
+        # Init the path Planner
+        self.pathPlanner = HermiteSplinePathPlanner(
+            initial_obs["gates_pos"],
+            initial_obs["gates_rpy"],
+            initial_obs["pos"],
+            initial_obs["rpy"],
+            self.x[self.state_indices["progress"]],  # Pass the progress variable
+        )
         # Setup nonlinear constraints
         self.setupNLConstraints()
-        # Setup Optimization variables and parameters
-
+        # Setup the cost function
+        self.setupMPCCCosts()
         # Last step
         super().setupCasadiFunctions()
 
     def setup_dynamics(self):
         self.modelName = "MPCCpp"
+        # States
         pos = ca.MX.sym("pos", 3)  # position in world frame
         vel = ca.MX.sym("vel", 3)  # velocity in world frame
         quat = ca.MX.sym("quat", 4)  # [qx, qy, qz,qw] quaternion rotation from body to world
@@ -662,7 +685,7 @@ class MPCCppDynamics(BaseDynamics):
         f = ca.MX.sym("f", 4)  # individual rotor thrusts
         progress = ca.MX.sym("progress", 1)  # progress along the path
         dprogress = ca.MX.sym("dprogress", 1)  # progress rate
-        x = ca.vertcat(pos, vel, quat, w, f, progress, dprogress)
+        x = ca.vertcat(pos, vel, quat, w, f, progress, dprogress)  # state vector
         self.state_indices = {
             "pos": np.arange(0, 3),
             "vel": np.arange(3, 6),
@@ -673,18 +696,23 @@ class MPCCppDynamics(BaseDynamics):
             "dprogress": np.arange(18, 19),
         }
 
+        # Controls
         df = ca.MX.sym("df", 4)  # individual rotor thrust rates
-        ddprogress = ca.MX.sym("ddprogress", 1)  # progress rate
-        u = ca.vertcat(df, ddprogress)
+        ddprogress = ca.MX.sym("ddprogress", 1)  # progress rate, virtual control
+        u = ca.vertcat(df, ddprogress)  # control vector
         self.control_indices = {"df": np.arange(0, 4), "ddprogress": np.arange(4, 5)}
 
+        # Helper variables
         beta = self.arm_length / ca.sqrt(2.0)
+        # Motor Thrusts to torques
         torques = ca.vertcat(
-            beta * (u[0] + u[1] - u[2] - u[3]),
-            beta * (-u[0] + u[1] + u[2] - u[3]),
-            self.gamma * (u[0] - u[1] + u[2] - u[3]),
+            beta * (f[0] + f[1] - f[2] - f[3]),
+            beta * (-f[0] + f[1] + f[2] - f[3]),
+            self.gamma * (f[0] - f[1] + f[2] - f[3]),
         )  # tau_x, tau_y, tau_z
-        thrust_total = ca.vertcat(0, 0, (u[0] + u[1] + u[2] + u[3]) / self.mass)
+        # total thrust
+        thrust_total = ca.vertcat(0, 0, (f[0] + f[1] + f[2] + f[3]) / self.mass)
+        # rotation matrix for quaternions from body to world frame
         Rquat = quaternion_to_rotation_matrix(quat)
 
         # Define the dynamics
@@ -708,104 +736,114 @@ class MPCCppDynamics(BaseDynamics):
         self.x = x
         self.dx = dx
         self.u = u
-
+        # Equilibrium state and control
         f_eq = 0.25 * self.mass * self.g * np.ones((4,))
         self.x_eq = np.concatenate([np.zeros((13,)), f_eq, np.zeros((2,))])  # Equilibrium state
         self.u_eq = np.zeros((5,))  # Equilibrium control
 
     def setupNLConstraints(self):
-        pos = self.x[self.state_indices["pos"]]
-        progress = self.x[self.state_indices["progress"]]
-        quat = self.x[self.state_indices["quat"]]
-        lh = 0
-        uh = 1e9
-        constraints = []
-        self.param_indices = {}
-        self.current_param_index = 0
-        # Quaternion constraints (norm = 1)
-        quat_norm = ca.norm_2(quat) - 1  # Ensure quaternion is normalized
-        constraints.append(quat_norm)
-        constraints_lh = np.zeros((1,))  # Lower bound for normalization constraint
-        constraints_uh = np.zeros((1,))  # Upper bound for normalization constraint
-        # Quaternion constraints (euler angle bounds)
-        quat_eul = quaternion_to_euler(quat)
-        constraints.append(quat_eul)
-        constraints_lh = np.concatenate([constraints_lh, self.eul_ang_lb])
-        constraints_uh = np.concatenate([constraints_uh, self.eul_ang_ub])
+        """Setup the nonlinear constraints for the drone/environment controller."""
+        super().setupQuatConstraints()
+        super().setupObstacleConstraints()
 
-        # Obstacle constraints
-        num_obstacles = self.obstacle_pos.shape[0]
-        num_params_per_obstacle = 2  # x, y
-        num_params_obstacle = num_obstacles * num_params_per_obstacle
-        p_obst = ca.MX.sym("p_obst", num_params_obstacle)
-        self.p = p_obst
-        self.param_indices["p_obst"] = np.arange(self.current_param_index, p_obst.size()[0])
-        self.current_param_index += p_obst.size()[0]
-        for k in range(num_obstacles):
-            constraints.append(
-                ca.norm_2(
-                    pos[:num_params_per_obstacle]
-                    - p_obst[k * num_params_per_obstacle : (k + 1) * num_params_per_obstacle]
-                )
-                - self.obstacle_diameter
+        self.setupTunnelConstraints()
+
+        self.updateParameters(obs=self.initial_obs, init=True)
+
+    def updateParameters(self, obs: dict = None, init: bool = False) -> np.ndarray:
+        """Update the parameters of the drone/environment controller."""
+        # Checks whether gate observation has been updated, replans if needed, and updates the path, dpath, and gate progresses parameters
+        if init:
+            self.param_values = np.zeros((self.p.size()[0],))
+            self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+            self.param_values[self.param_indices["p_gate_progress"]] = (
+                self.pathPlanner.gate_progresses
             )
-        constraints_lh = np.concatenate([constraints_lh, np.zeros((num_obstacles,))])
-        constraints_uh = np.concatenate([constraints_uh, np.ones((num_obstacles,)) * uh])
+        else:
+            if np.any(np.not_equal(self.gates_visited, obs["gates_visited"])):
+                self.gates_visited = obs["gates_visited"]
+                self.gates_pos = obs["gates_pos"]
+                self.gates_rpy = obs["gates_rpy"]
+                self.pathPlanner.update_gates(self.gates_pos, self.gates_rpy)
+                self.param_values[self.param_indices["p_gate_progress"]] = (
+                    self.pathPlanner.gate_progresses
+                )
+            # Checks whether obstacle observation has been updated, updates the obstacle positions
+            if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
+                self.obstacles_visited = obs["obstacles_visited"]
+                self.obstacles_pos = obs["obstacles_pos"]
+                self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
+            # Return the updated parameter values for the acados interface
+            return self.param_values
 
-        # Progress constraints
-
-        # Tunnel constraints
-        Wn = self.Wn  # Nominal tunnel width = tunnel height
-        Wgate = self.Wgate  # Tunnel width = tunnel height at the gate
-        num_gates = self.gate_pos.size()[0]
-        # Paremeter for the progress of the gates
+    def setupTunnelConstraints(self):
+        """Setup the tunnel constraints for the drone/environment controller."""
+        # Progress along the path state
+        progress = self.x[self.state_indices["progress"]]
+        pos = self.x[self.state_indices["pos"]]
+        # Nominal tunnel width = tunnel height
+        Wn = self.Wn
+        # Tunnel width = tunnel height at the gate
+        Wgate = self.Wgate
+        num_gates = self.gates_pos.size()[0]
+        # Parameter for the gate progresses, e.g., at which progress the respective is gate is reached. Exaple: [0.1, 0.3, 0.5, 0.7]
         p_gate_progress = ca.MX.sym("gate_progress", num_gates)
 
         def getTunnelWidth(gate_progress: ca.MX, progress: ca.MX) -> ca.MX:
             """Calculate the tunnel width at the current progress."""
             # Calculate the progress distance to the nearest gate
             d = ca.fmin(ca.fabs(gate_progress - progress))
-            # Return the tunnel width (and height)
-            return Wn + (Wgate - Wn) / (1 + ca.exp(-d))
+            k = 10  # Steepness of the transition
+            x0 = 0.1  # Midpoint of the transition
+            sigmoid = 1 / (1 + ca.exp(-k * (d - x0)))
+            return Wn + (Wgate - Wn) * sigmoid
 
         W = getTunnelWidth(p_gate_progress, progress)
         H = W  # Assuming W(θk) = H(θk)
-        # Parameters for the reference frame of the tunnels
-        # ref_frame(theta) = [t(theta), n(theta), b(theta)] = 3 x 3 matrix
-        p_ref_frame = ca.MX.sym("ref_frame", (3, 3))
-        p_pd = ca.MX.sym("pd", 3)  # Centerline of the tunnel
-        # t = self.tangent_vector(progress)
-        # n = self.normal_vector(progress)
-        # b = self.binormal_vector(progress)s
-        # pd = self.centerline(progress)
-        p0 = p_pd - W * p_ref_frame[:, 1] - H * p_ref_frame[:, 2]
+
+        # Symbolic functions for the path and its derivative
+        path_func = self.pathPlanner.path_func(progress)
+        dpath_func = self.pathPlanner.dpath_func(progress)
+
+        t = dpath_func / ca.norm_2(dpath_func)  # Normalized Tangent vector at the current progress
+        # Compute the normal vector n (assuming the normal is in the xy-plane)
+        n = ca.vertcat(-t[1], t[0], 0)
+        # Compute the binormal vector b
+        b = ca.cross(t, n)
+
+        pd = path_func  # Position of the path at the current progress
+        p0 = pd - W * n - H * b
         # Tunnel constraints
-        constraints.append((pos - p0).T @ p_ref_frame[:, 1])
-        constraints.append(2 * H - (pos - p0).T @ p_ref_frame[:, 1])
-        constraints.append((pos - p0).T @ p_ref_frame[:, 2])
-        constraints.append(2 * W - (pos - p0).T @ p_ref_frame[:, 2])
+        tunnel_constraints = []
+        tunnel_constraints.append((pos - p0).T @ n)
+        tunnel_constraints.append(2 * H - (pos - p0).T @ n)
+        tunnel_constraints.append((pos - p0).T @ b)
+        tunnel_constraints.append(2 * W - (pos - p0).T @ b)
 
-        constraints_lh = np.concatenate([constraints_lh, np.zeros((4,))])
-        constraints_uh = np.concatenate([constraints_uh, np.ones((4,)) * uh])
+        # Add the tunnel constraints to the the constraints
+        if self.nl_constr is None:
+            self.nl_constr = ca.vertcat(*tunnel_constraints)
+            self.nl_constr_lh = np.zeros((4,))
+            self.nl_constr_uh = np.ones((4,)) * 1e9
+        else:
+            self.nl_constr = ca.vertcat(self.nl_constr, *tunnel_constraints)
+            self.nl_constr_lh = np.concatenate([self.nl_constr_lh, np.zeros((4,))])
+            self.nl_constr_uh = np.concatenate([self.nl_constr_uh, np.ones((4,)) * 1e9])
 
-        self.p = ca.vertcat(self.p, p_gate_progress, p_ref_frame, p_pd)
+        self.nl_constr_indices["tunnel"] = np.arange(
+            self.current_nl_constr_index, tunnel_constraints.size()[0]
+        )
+        self.current_nl_constr_index += tunnel_constraints.size()[0]
+
+        # Add the path, dpath, and gate_progress parameters to the parameter vector
+        if self.p is None:
+            self.p = p_gate_progress
+        else:
+            self.p = ca.vertcat(self.p, p_gate_progress)
         self.param_indices["p_gate_progress"] = np.arange(
             self.current_param_index, p_gate_progress.size()[0]
         )
         self.current_param_index += p_gate_progress.size()[0]
-        self.param_indices["p_ref_frame"] = np.arange(
-            self.current_param_index, p_ref_frame.size()[0]
-        )
-        self.current_param_index += p_ref_frame.size()[0]
-        self.param_indices["p_pd"] = np.arange(self.current_param_index, p_pd.size()[0])
-        self.current_param_index += p_pd.size()[0]
-
-        # Combine constraints into a single vector
-        self.param_values = np.zeros((self.p.size()[0],))
-        self.param_values[self.param_indices["p_obst"]] = self.obstacle_pos.flatten()
-        self.nl_constr = ca.vertcat(*constraints)
-        self.nl_constr_lh = constraints_lh
-        self.nl_constr_uh = constraints_uh
 
     def setupBoundsAndScals(self):
         x_lb = np.concatenate(
@@ -824,21 +862,12 @@ class MPCCppDynamics(BaseDynamics):
                 self.state_indices["dprogress"],
             ]
         )
-        self.noSlackStates = np.diff1d(
-            np.arange(0, len(x_lb), 1),
-            np.concatenate(
-                self.state_indices["u"],
-                self.state_indices["w"],
-                self.state_indices["vel"],
-                self.state_indices["pos"][:-1],
-            ),  # no slack for thurst, vel, w, pos_x, pos_y
-        )
+        self.nsx = self.slackStates.size()[0]
+
         self.slackControls = np.concatenate(
             [self.control_indices["df"], self.control_indices["ddprogress"]]
         )
-        self.noSlackControls = np.diff1d(
-            np.arange(0, len(u_lb), 1), []
-        )  # All controls have slack variables
+        self.nsu = self.slackControls.size()[0]
 
         self.x_lb = x_lb
         self.x_ub = x_ub
@@ -853,3 +882,82 @@ class MPCCppDynamics(BaseDynamics):
         self.u_lb = u_lb
         self.u_ub = u_ub
         self.u_scal = self.u_ub - self.u_lb
+
+    def setupMPCCCosts(self):
+        """Setup the cost function for the MPCCpp controller.
+
+        We are using the EXTERNAL interface of acados to define the cost function.
+        The cost function has 6 components:
+        1. Lag error: The error between the current position and the desired position
+        2. Contour error: The error between the current position and the desired contour
+        3. Body angular velocity: The angular velocity of the body
+        5. Thrust rate: The rate of change of the thrust
+        4. Progress rate: The L2 norm rate of progress along the path
+        6. Progress rate: The negative L1 rate of progress along the path.
+        """
+        self.cost_dict = {}
+        cost_info = self.cost_info
+
+        self.cost_dict["cost_type"] = "external"
+        self.cost_dict["cost_type_e"] = "external"
+        # Lag error weights
+        Ql = cost_info.get("Ql", 1)
+        self.cost_dict["Ql"] = ca.diag([Ql, Ql, Ql])
+        # Contour error weights
+        Qc = cost_info.get("Qc", 1)
+        self.cost_dict["Qc"] = ca.diag([Qc, Qc, Qc])
+        # Body Angular velocity weights
+        Qw = cost_info.get("Qw", 1)
+        self.cost_dict["Qw"] = ca.diag([Qw, Qw, Qw])
+        # Progress rate weights
+        self.cost_dict["Qmu"] = cost_info.get("Qmu", 1)
+        # Thrust rate weights
+        Rdf = cost_info.get("Rdf", 1)
+        self.cost_dict["Rdf"] = ca.diag([Rdf, Rdf, Rdf, Rdf])
+        # Progress rate weights
+        self.cost_dict["Rdprogress"] = cost_info.get("Rdprogress", 1)
+        # Define the cost function
+        self.cost_dict["stage_cost"] = self.MPCC_stage_cost
+        self.cost_dict["terminal_cost"] = self.MPCC_stage_cost  # use zero for u
+
+    def MPCC_stage_cost(self, x, u, p):
+        pos = x[self.state_indices["pos"]]
+        w = x[self.state_indices["w"]]
+        progress = x[self.state_indices["progress"]]
+        dprogress = x[self.state_indices["dprogress"]]
+        df = u[self.control_indices["df"]]
+
+        # Desired position and tangent vector on the path
+        path = self.pathPlanner.path_func  # Unpack the path function
+        dpath = self.pathPlanner.dpath_func  # Unpack the path gradient function
+        pd = path(progress)  # Desired position on the path
+        tangent_line = dpath(progress)  # Tangent vector of the path at the current progress
+        tangent_line = tangent_line / ca.norm_2(tangent_line)  # Normalize the tangent vector
+        pos_err = pos - pd  # Error between the current position and the desired position
+
+        # Lag error
+        lag_err = ca.mtimes([ca.dot(pos_err, tangent_line), tangent_line])
+        lag_cost = ca.mtimes([lag_err.T, self.cost_dict["Ql"], lag_err])
+
+        # Contour error
+        contour_err = pos_err - lag_err
+        contour_cost = ca.mtimes([contour_err.T, self.cost_dict["Qc"], contour_err])
+
+        # Body angular velocity cost
+        w_cost = ca.mtimes([w.T, self.cost_dict["Qw"], w])
+
+        # Progress rate cost
+        dprogress_cost_L2 = ca.mtimes([dprogress.T, self.cost_dict["Rdprogress"], dprogress])
+
+        # Progress rate cost
+        dprogress_cost = -dprogress * self.cost_dict["Qmu"]
+
+        # Thrust rate cost
+        thrust_rate_cost = ca.mtimes([df.T, self.cost_dict["Rdf"], df])
+
+        # Total stage cost
+        stage_cost = (
+            lag_cost + contour_cost + w_cost + dprogress_cost + dprogress_cost_L2 + thrust_rate_cost
+        )
+
+        return stage_cost

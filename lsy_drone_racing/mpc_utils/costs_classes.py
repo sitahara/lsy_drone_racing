@@ -7,6 +7,23 @@ import casadi as ca
 
 
 class BaseCost:
+    """Base class for the cost functions in the MPC controller.
+    Args:
+        state_indices: A dictionary containing the indices of the states.
+        control_indices: A dictionary containing the indices of the controls.
+        param_indices: A dictionary containing the indices of the parameters.
+        cost_info: A dictionary containing the cost information.
+    Attributes:
+        dynamics: The dynamics model of the system.
+        cost_info: A dictionary containing the cost information.
+        cost_type: The type of cost function to use.
+        stageCostFunc: The stage cost function.
+        terminalCostFunc: The terminal cost function.
+
+    Methods:
+
+    """
+
     def __init__(
         self,
         dynamics: BaseDynamics,
@@ -19,13 +36,21 @@ class BaseCost:
             "Qs_quat": np.array([0.01, 0.01, 0.01, 0.01]),
             "Rs": np.array([0.01, 0.01, 0.01, 0.01]),
             "Rd": np.array([0.01, 0.01, 0.01, 0.01]),
-            "Q_time": np.array([1]),
-            "Q_gate": np.array([1, 1, 10, 0.1, 0.1, 0.1]),  # x, y, z, roll, pitch, yaw
+            "Ql": 1,
+            "Qc": 1,
+            "Qw": 1,
+            "Qmu": 1,
+            "Rdf": 1,
+            "Rdprogress": 1,
         },
     ):
         self.dynamics = dynamics
         self.cost_info = cost_info
         self.cost_type = cost_info.get("cost_type", "linear")
+
+        # Those two functions will be defined in the subclasses
+        self.stageCostFunc = None
+        self.terminalCostFunc = None
 
         if self.cost_type == "linear":
             self.setupLinearCosts()
@@ -79,18 +104,22 @@ class BaseCost:
         self.stageCostFunc = self.LQ_stageCost
         self.terminalCostFunc = self.LQ_terminalCost
 
-    def LQ_stageCost(self, x, u, x_ref, u_ref):
+    def LQ_stageCost(self, x, u, p):
         """Compute the LQR cost."""
+        x_ref = p[self.dynamics.param_indices["x_ref"]]
+        u_ref = p[self.dynamics.param_indices["u_ref"]]
         return ca.mtimes([(x - x_ref).T, self.Qs, x - x_ref]) + ca.mtimes(
             [(u - u_ref).T, self.R, u - u_ref]
         )
 
-    def LQ_terminalCost(self, x, x_ref):
+    def LQ_terminalCost(self, x, p):
         """Compute the LQR cost."""
+        x_ref = p[self.dynamics.param_indices["x_ref"]]
         return ca.mtimes([(x - x_ref).T, self.Qt, x - x_ref])
 
     def setupMPCCCosts(self):
         """Setup the cost function for the MPCCpp controller.
+
         We are using the EXTERNAL interface of acados to define the cost function.
         The cost function has 6 components:
         1. Lag error: The error between the current position and the desired position
@@ -122,27 +151,31 @@ class BaseCost:
         self.stageCostFunc = self.MPCC_stage_cost
         self.terminalCostFunc = self.MPCC_terminalCost
 
-    def get_tangent_vector(self, pd, theta):
+    def get_tangent_vector(self, dpath, theta):
         # Compute the tangent vector of the path at theta
-        dpd_dtheta = ca.gradient(pd, theta)
+        dpd_dtheta = dpath(theta)
         tangent = dpd_dtheta / ca.norm_2(dpd_dtheta)
         return tangent
 
     def MPCC_stage_cost(self, x, u, p):
         pos = x[self.dynamics.state_indices["pos"]]
-        vel = x[self.dynamics.state_indices["vel"]]
-        quat = x[self.dynamics.state_indices["quat"]]
+        # vel = x[self.dynamics.state_indices["vel"]]
+        # quat = x[self.dynamics.state_indices["quat"]]
         w = x[self.dynamics.state_indices["w"]]
-        f = x[self.dynamics.state_indices["f"]]
+        # f = x[self.dynamics.state_indices["f"]]
         progress = x[self.dynamics.state_indices["progress"]]
         dprogress = x[self.dynamics.state_indices["dprogress"]]
         df = u[self.dynamics.control_indices["df"]]
-        ddprogress = u[self.dynamics.control_indices["ddprogress"]]
+        # ddprogress = u[self.dynamics.control_indices["ddprogress"]]
 
         # Desired position and tangent vector on the path
-        pd = p["pd"]
-        tangent_line = self.get_tangent_vector(pd, progress)
-        pos_err = pos - pd
+        path = p[self.dynamics.param_indices["path"]]  # Unpack the path function
+        dpath = p[self.dynamics.param_indices["dpath"]]  # Unpack the path gradient function
+        pd = path(progress)  # Desired position on the path
+        tangent_line = self.get_tangent_vector(
+            dpath, progress
+        )  # Tangent vector of the path at the current progress
+        pos_err = pos - pd  # Error between the current position and the desired position
 
         # Lag error
         lag_err = ca.dot(pos_err, tangent_line) * tangent_line
@@ -156,7 +189,7 @@ class BaseCost:
         w_cost = ca.mtimes([w.T, self.Qw, w])
 
         # Progress rate cost
-        dprogress_cost = -dprogress * self.qmu
+        dprogress_cost = -dprogress * self.Qmu
 
         # Thrust rate cost
         thrust_rate_cost = ca.mtimes([df.T, self.Rdf, df])
@@ -165,6 +198,40 @@ class BaseCost:
         stage_cost = lag_cost + contour_cost + w_cost + dprogress_cost + thrust_rate_cost
 
         return stage_cost
+
+    def MPCC_terminalCost(self, x, p):
+        pos = x[self.dynamics.state_indices["pos"]]
+        w = x[self.dynamics.state_indices["w"]]
+        progress = x[self.dynamics.state_indices["progress"]]
+        dprogress = x[self.dynamics.state_indices["dprogress"]]
+
+        # Desired position and tangent vector on the path
+        path = p[self.dynamics.param_indices["path"]]  # Unpack the path function
+        dpath = p[self.dynamics.param_indices["dpath"]]  # Unpack the path gradient function
+        pd = path(progress)  # Desired position on the path
+        tangent_line = self.get_tangent_vector(
+            dpath, progress
+        )  # Tangent vector of the path at the current progress
+        pos_err = pos - pd  # Error between the current position and the desired position
+
+        # Lag error
+        lag_err = ca.dot(pos_err, tangent_line) * tangent_line
+        lag_cost = ca.mtimes([lag_err.T, self.Ql, lag_err])
+
+        # Contour error
+        contour_err = pos_err - lag_err
+        contour_cost = ca.mtimes([contour_err.T, self.Qc, contour_err])
+
+        # Body angular velocity cost
+        w_cost = ca.mtimes([w.T, self.Qw, w])
+
+        # Progress rate cost
+        dprogress_cost = -dprogress * self.Qmu
+
+        # Total terminal  cost
+        terminal_cost = lag_cost + contour_cost + w_cost + dprogress_cost
+
+        return terminal_cost
 
     # def setupMPCCCosts(self):
     #     """Setup the MPC costs."""

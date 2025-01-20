@@ -1,160 +1,109 @@
-import pytest
+import unittest
 import numpy as np
-from lsy_drone_racing.mpc_utils.Planner.PathPlanner import PathPlanner
+import casadi as ca
 import matplotlib.pyplot as plt
-import time
-
-# FILE: lsy_drone_racing/mpc_utils/Planner/test_PathPlanner.py
+from lsy_drone_racing.mpc_utils.Planner.PathPlanner import PathPlanner
 
 
-class TestPathPlanner:
-    def test_create_centerline(self):
-        gate_positions = np.array([[0, 0, 0], [1, 1, 0], [2, 0, 0]])
-        gate_orientations = np.array([[0, 0, 0], [0, 0, np.pi / 4], [0, 0, np.pi / 2]])
-        obstacles = []
+class TestPathPlanner(unittest.TestCase):
+    def setUp(self):
+        self.gate_positions = np.array([[1, 2, 2], [1, 0, 1], [2, 1, 0.5]])
+        self.gate_orientations = np.array([[0, 0, 0], [0, 0, np.pi], [0, 0, np.pi / 2]])
+        self.start_position = np.array([0, 0, 0])
+        self.start_orientation = np.array([0, 0, 0])
+        self.theta = ca.MX.sym("theta")
+        self.reparameterize = False
 
-        planner = PathPlanner(gate_positions, gate_orientations, obstacles)
-        path, tangent_vectors = planner.create_centerline(gate_positions, gate_orientations)
-
-        assert len(path) > len(gate_positions)
-        assert len(tangent_vectors) > len(gate_orientations)
-        assert np.allclose(path[0], gate_positions[0])
-        assert np.allclose(path[-1], gate_positions[-1])
-        assert np.allclose(tangent_vectors[0], planner.compute_gate_normals(gate_orientations)[0])
-        assert np.allclose(tangent_vectors[-1], planner.compute_gate_normals(gate_orientations)[-1])
-
-    def test_path_planning_with_obstacles(self):
-        gates = [
-            {"pos": [0.45, -1.0, 0.56], "rpy": [0.0, 0.0, 2.35]},
-            {"pos": [1.0, -1.55, 1.11], "rpy": [0.0, 0.0, -0.78]},
-            {"pos": [0.0, 0.5, 0.56], "rpy": [0.0, 0.0, 0.0]},
-            {"pos": [-0.5, -0.5, 1.11], "rpy": [0.0, 0.0, 3.14]},
-        ]
-
-        obstacles = [
-            {"pos": [1.0, -0.5, 1.4]},
-            {"pos": [0.5, -1.5, 1.4]},
-            {"pos": [0.0, 1.0, 1.4]},
-            {"pos": [-0.5, 0.0, 1.4]},
-        ]
-
-        gate_positions = np.array([gate["pos"] for gate in gates])
-        gate_orientations = np.array([gate["rpy"] for gate in gates])
-
-        planner = PathPlanner(gate_positions, gate_orientations, obstacles)
-        path, tangent_vectors = planner.create_centerline(gate_positions, gate_orientations)
-
-        # Verify the path passes through the gates
-        for i, gate in enumerate(gates):
-            gate_pos = np.array(gate["pos"])
-            assert np.allclose(path[i * 101], gate_pos), f"Path does not pass through gate {i + 1}"
-
-        # Verify the path avoids obstacles
-        for obstacle in obstacles:
-            obs_pos = np.array(obstacle["pos"])
-            for point in path:
-                assert np.linalg.norm(point - obs_pos) > 0.1, "Path is too close to an obstacle"
-
-        print("Path passes through all gates and avoids obstacles.")
-        # Visualization
-        self.visualize_path(gates, obstacles, path, title="Initial Path")
-
-        # Update obstacles and gate positions
-        new_obstacles = [
-            {"pos": [1.0, -0.5, 1.4]},
-            {"pos": [0.5, -1.5, 1.4]},
-            {"pos": [0.0, 1.0, 1.4]},
-            {"pos": [-0.5, 0.0, 1.4]},
-            {"pos": [0.5, 0.0, 1.4]},  # New obstacle
-        ]
-
-        new_gate_positions = np.array(
-            [
-                [0.45, -1.0, 0.56],
-                [1.0, -1.55, 1.11],
-                [0.0, 0.5, 0.56],
-                [-0.5, -0.5, 1.11],
-                [0.5, 0.5, 0.56],
-            ]
+    def test_initialization(self):
+        planner = PathPlanner(
+            self.gate_positions,
+            self.gate_orientations,
+            self.start_position,
+            self.start_orientation,
+            self.theta,
+            reparameterize=self.reparameterize,
         )
-        new_gate_orientations = np.array(
-            [
-                [0.0, 0.0, 2.35],
-                [0.0, 0.0, -0.78],
-                [0.0, 0.0, 0.0],
-                [0.0, 0.0, 3.14],
-                [0.0, 0.0, 1.57],
-            ]
-        )
+        self.assertIsNotNone(planner.path)
+        self.assertIsNotNone(planner.dpath)
 
-        # Measure the time required for replanning
-        start_time = time.time()
-        planner.update_gate_positions(new_gate_positions, new_gate_orientations)
-        planner.update_obstacles(new_obstacles)
-        new_path, new_tangent_vectors = planner.create_centerline(
-            new_gate_positions, new_gate_orientations
+    def test_update_path(self):
+        planner = PathPlanner(
+            self.gate_positions,
+            self.gate_orientations,
+            self.start_position,
+            self.start_orientation,
+            self.theta,
+            reparameterize=self.reparameterize,
         )
-        end_time = time.time()
-        replanning_time = end_time - start_time
+        theta_val = 0.5
+        path_val = planner.path(theta_val).full()
+        dpath_val = planner.dpath(theta_val).full()
+        self.assertEqual(path_val.shape, (3,))
+        self.assertEqual(dpath_val.shape, (3,))
 
-        print(f"Replanning time: {replanning_time:.4f} seconds")
-        # Visualization
-        self.visualize_path(
-            gates,
-            obstacles,
-            path,
-            new_gates=new_gate_positions,
-            new_obstacles=new_obstacles,
-            new_path=new_path,
-            title="Updated Path",
+    def test_plot_path(self):
+        planner = PathPlanner(
+            self.gate_positions,
+            self.gate_orientations,
+            self.start_position,
+            self.start_orientation,
+            self.theta,
+            reparameterize=self.reparameterize,
         )
+        theta_samples = np.linspace(0, 1, 100)
+        path_samples = np.array([planner.path(theta).full().flatten() for theta in theta_samples])
 
-    def visualize_path(
-        self,
-        gates,
-        obstacles,
-        path,
-        new_gates=None,
-        new_obstacles=None,
-        new_path=None,
-        title="Path",
-    ):
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
-
-        # Plot gates
-        for gate in gates:
-            pos = gate["pos"]
-            ax.scatter(pos[0], pos[1], pos[2], c="g", marker="o", label="Gate")
-
-        # Plot obstacles
-        for obstacle in obstacles:
-            pos = obstacle["pos"]
-            ax.scatter(pos[0], pos[1], pos[2], c="r", marker="x", label="Obstacle")
-
-        # Plot path
-        path = np.array(path)
-        ax.plot(path[:, 0], path[:, 1], path[:, 2], c="b", label="Path")
-
-        if new_gates is not None:
-            # Plot new gates
-            for pos in new_gates:
-                ax.scatter(pos[0], pos[1], pos[2], c="c", marker="o", label="New Gate")
-
-        if new_obstacles is not None:
-            # Plot new obstacles
-            for obstacle in new_obstacles:
-                pos = obstacle["pos"]
-                ax.scatter(pos[0], pos[1], pos[2], c="m", marker="x", label="New Obstacle")
-
-        if new_path is not None:
-            # Plot new path
-            new_path = np.array(new_path)
-            ax.plot(new_path[:, 0], new_path[:, 1], new_path[:, 2], c="y", label="New Path")
-
+        ax.plot(path_samples[:, 0], path_samples[:, 1], path_samples[:, 2], label="Planned Path")
+        ax.scatter(
+            self.start_position[0],
+            self.start_position[1],
+            self.start_position[2],
+            color="red",
+            label="Start Position",
+        )
+        ax.scatter(
+            self.gate_positions[:, 0],
+            self.gate_positions[:, 1],
+            self.gate_positions[:, 2],
+            color="blue",
+            label="Gate Positions",
+        )
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
         ax.set_zlabel("Z")
-        ax.set_title(title)
-        plt.legend()
+        ax.legend()
         plt.show()
+
+    def test_reparameterize_spline_by_arc_length(self):
+        planner = PathPlanner(
+            self.gate_positions,
+            self.gate_orientations,
+            self.start_position,
+            self.start_orientation,
+            self.theta,
+            reparameterize=True,
+        )
+        theta_val = 0.5
+        path_val = planner.path(theta_val).full()
+        dpath_val = planner.dpath(theta_val).full()
+        self.assertEqual(path_val.shape, (3,))
+        self.assertEqual(dpath_val.shape, (3,))
+
+    def test_update_parameters(self):
+        planner = PathPlanner(
+            self.gate_positions,
+            self.gate_orientations,
+            self.start_position,
+            self.start_orientation,
+            self.theta,
+            reparameterize=self.reparameterize,
+        )
+        new_gate_positions = np.array([[2, 3, 4], [5, 6, 7], [8, 9, 10]])
+        planner.update_parameters(gate_positions=new_gate_positions)
+        self.assertTrue(np.array_equal(planner.gate_positions, new_gate_positions))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -122,16 +122,18 @@ class IPOPTOptimizer(BaseOptimizer):
         # State/Control constraints with slack variables (no slack for certain states/controls)
         for i in range(self.n_horizon + 1):
             for k in range(self.nx):
-                if k in self.dynamics.noSlackStates:
-                    opti.subject_to(opti.bounded(X_lb[k], X[k, i], X_ub[k]))
-                else:
+                if k in self.dynamics.slackStates:
                     opti.subject_to(opti.bounded(X_lb[k] - s_x[k, i], X[k, i], X_ub[k] + s_x[k, i]))
+                else:
+                    opti.subject_to(opti.bounded(X_lb[k], X[k, i], X_ub[k]))
+
         for i in range(self.n_horizon):
             for k in range(self.nu):
-                if k in self.dynamics.noSlackControls:
-                    opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
-                else:
+                if k in self.dynamics.slackControls:
                     opti.subject_to(opti.bounded(U_lb - s_u[:, i], U[:, i], U_ub + s_u[:, i]))
+                else:
+                    opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
+
         ### Costs
         cost = 0
         stage_cost_function = self.costs.stageCostFunc
