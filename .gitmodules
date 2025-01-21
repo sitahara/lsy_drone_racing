@@ -4,3 +4,6 @@
 [submodule "external/L4acados"]
 	path = external/L4acados
 	url = https://github.com/IntelligentControlSystems/l4acados.git
+[submodule "external/TuRBO"]
+	path = external/TuRBO
+	url = https://github.com/uber-research/TuRBO.git
