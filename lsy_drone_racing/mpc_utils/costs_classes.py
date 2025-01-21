@@ -8,6 +8,7 @@ import casadi as ca
 
 class BaseCost:
     """Base class for the cost functions in the MPC controller.
+
     Args:
         state_indices: A dictionary containing the indices of the states.
         control_indices: A dictionary containing the indices of the controls.
@@ -29,13 +30,13 @@ class BaseCost:
         dynamics: BaseDynamics,
         cost_info: dict = {
             "cost_type": "linear",  # "MPCC",
-            "Qs_pos": np.array([1, 1, 10]),
-            "Qs_vel": np.array([0.1, 0.1, 0.1]),
-            "Qs_ang": np.array([0.1, 0.1, 0.1]),
-            "Qs_dang": np.array([0.1, 0.1, 0.1]),
-            "Qs_quat": np.array([0.01, 0.01, 0.01, 0.01]),
-            "Rs": np.array([0.01, 0.01, 0.01, 0.01]),
-            "Rd": np.array([0.01, 0.01, 0.01, 0.01]),
+            "Qs_pos": 1,
+            "Qs_vel": 0.1,
+            "Qs_ang": 0.1,
+            "Qs_dang": 0.1,
+            "Qs_quat": 0.01,
+            "Rs": 0.01,
+            "Rd": 0.01,
             "Ql": 1,
             "Qc": 1,
             "Qw": 1,
@@ -61,19 +62,28 @@ class BaseCost:
 
     def setupLinearCosts(self):
         """Setup the linear (Quadratic) costs of form: (sum_i ||x_i-x_ref_i||_{Qs}^2 + ||u_i-u_ref_i||_{R}^2) + ||x_N-x_ref_N||_{Qt}^2."""
-        Qs_pos = self.cost_info.get("Qs_pos", np.array([1, 1, 10]))
-        Qs_vel = self.cost_info.get("Qs_vel", np.array([0.1, 0.1, 0.1]))
-        Qs_ang = self.cost_info.get("Qs_ang", np.array([0.1, 0.1, 0.1]))
-        Qs_dang = self.cost_info.get("Qs_dang", np.array([0.1, 0.1, 0.1]))
-        Qs_quat = self.cost_info.get("Qs_quat", np.array([0.01, 0.01, 0.01, 0.01]))
+        Qs_pos = self.cost_info.get("Qs_pos", 1)
+        Qs_pos = np.array([Qs_pos, Qs_pos, Qs_pos * 5])
+        Qs_vel = self.cost_info.get("Qs_vel", 0.1)
+        Qs_vel = np.array([Qs_vel, Qs_vel, Qs_vel])
+        Qs_ang = self.cost_info.get("Qs_ang", 0.1)
+        Qs_ang = np.array([Qs_ang, Qs_ang, Qs_ang])
+        Qs_dang = self.cost_info.get("Qs_dang", 0.1)
+        Qs_dang = np.array([Qs_dang, Qs_dang, Qs_dang])
+        Qs_quat = self.cost_info.get("Qs_quat", 0.01)
+        Qs_quat = np.array([Qs_quat, Qs_quat, Qs_quat, Qs_quat])
+
         Qt_pos = self.cost_info.get("Qt_pos", Qs_pos)
         Qt_vel = self.cost_info.get("Qt_vel", Qs_vel)
         Qt_ang = self.cost_info.get("Qt_ang", Qs_ang)
         Qt_dang = self.cost_info.get("Qt_dang", Qs_dang)
         Qt_quat = self.cost_info.get("Qt_quat", Qs_quat)
 
-        Rs = self.cost_info.get("Rs", np.array([0.01, 0.01, 0.01, 0.01]))
-        Rd = self.cost_info.get("Rd", np.array([0.01, 0.01, 0.01, 0.01]))
+        Rs = self.cost_info.get("Rs", 0.01)
+        Rs = np.array([Rs, Rs, Rs, Rs])
+        Rd = self.cost_info.get("Rd", 0.01)
+        Rd = np.array([Rd, Rd, Rd, Rd])
+
         if self.dynamics.baseDynamics == "Euler":
             Qs = np.concatenate([Qs_pos, Qs_vel, Qs_ang, Qs_dang])
             Qt = np.concatenate([Qt_pos, Qt_vel, Qt_ang, Qt_dang])
@@ -96,11 +106,11 @@ class BaseCost:
         self.x_ref = np.tile(
             self.dynamics.x_eq.reshape(self.dynamics.nx, 1), self.dynamics.n_horizon + 1
         )
-        print(self.x_ref.shape)
+        # print(self.x_ref.shape)
         self.u_ref = np.tile(
             self.dynamics.u_eq.reshape(self.dynamics.nu, 1), self.dynamics.n_horizon
         )
-        print(self.u_ref.shape)
+        # print(self.u_ref.shape)
         self.stageCostFunc = self.LQ_stageCost
         self.terminalCostFunc = self.LQ_terminalCost
 
@@ -139,15 +149,15 @@ class BaseCost:
         Qc = cost_info.get("Qc", 1)
         self.Qc = ca.diag([Qc, Qc, Qc])
         # Body Angular velocity weights
-        Qw = cost_info.get("Qw", 1)
+        Qw = cost_info.get("Qw", 0.1)
         self.Qw = ca.diag([Qw, Qw, Qw])
         # Progress rate weights
         self.Qmu = cost_info.get("Qmu", 1)
         # Thrust rate weights
-        Rdf = cost_info.get("Rdf", 1)
+        Rdf = cost_info.get("Rdf", 0.01)
         self.Rdf = ca.diag([Rdf, Rdf, Rdf, Rdf])
         # Progress rate weights
-        self.Rdprogress = cost_info.get("Rdprogress", 1)
+        self.Rdprogress = cost_info.get("Rdprogress", 0.1)
         self.stageCostFunc = self.MPCC_stage_cost
         self.terminalCostFunc = self.MPCC_terminalCost
 
@@ -159,14 +169,10 @@ class BaseCost:
 
     def MPCC_stage_cost(self, x, u, p):
         pos = x[self.dynamics.state_indices["pos"]]
-        # vel = x[self.dynamics.state_indices["vel"]]
-        # quat = x[self.dynamics.state_indices["quat"]]
         w = x[self.dynamics.state_indices["w"]]
-        # f = x[self.dynamics.state_indices["f"]]
         progress = x[self.dynamics.state_indices["progress"]]
         dprogress = x[self.dynamics.state_indices["dprogress"]]
         df = u[self.dynamics.control_indices["df"]]
-        # ddprogress = u[self.dynamics.control_indices["ddprogress"]]
 
         # Desired position and tangent vector on the path
         path = p[self.dynamics.param_indices["path"]]  # Unpack the path function
@@ -232,35 +238,3 @@ class BaseCost:
         terminal_cost = lag_cost + contour_cost + w_cost + dprogress_cost
 
         return terminal_cost
-
-    # def setupMPCCCosts(self):
-    #     """Setup the MPC costs."""
-    #     cost_info = self.cost_info
-    #     Qc = cost_info.get("Qc", np.array([1, 1, 10]))
-    #     self.stageCostFunc = self.MPC_stageCost
-    #     self.terminalCostFunc = self.MPC_terminalCost
-
-    # def stageCost_MPCC(self, x, u, x_ref, u_ref):
-    #     """Compute the MPC cost."""
-    #     pos = x[self.dynamics.state_indices["pos"]]
-    #     theta = x[self.dynamics.state_indices["theta"]]
-
-    #     # Countouring cost
-    #     contour_err = self.compute_contour_error(pos, theta)
-    #     contour_cost = ca.mtimes([contour_err.T, self.Qc, contour_err])
-    #     # Lag cost
-    #     lag_err = self.compute_lag_error(pos, theta)
-    #     lag_cost = ca.mtimes([lag_err.T, self.Ql, lag_err])
-    #     # Body angular velocity cost
-    #     w = x[self.dynamics.state_indices["w"]]
-    #     ang_vel_cost = ca.mtimes([w.T, self.Qs_dang, w])
-    #     # Control rate cost
-    #     du = x[self.dynamics.state_indices["du"]]
-    #     du_cost = ca.mtimes([du.T, self.R, du])
-    #     # Progress derivative costs
-    #     dprogress_cost_L2 = ca.mtimes([dtheta.T, self.Qp, dtheta])
-    #     dprogress_cost_L1 = -progress_weight * dtheta
-
-    #     return (
-    #         lag_cost + contour_cost + ang_vel_cost + du_cost + dprogress_cost_L2 + dprogress_cost_L1
-    #     )

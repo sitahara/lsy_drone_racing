@@ -23,7 +23,6 @@ class BaseOptimizer(ABC):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
@@ -31,13 +30,26 @@ class BaseOptimizer(ABC):
             "useZoro": False,
             "export_dir": "generated_code/mpc",
         },
+        solver_options: dict = {
+            "ipopt.print_level": 0,
+            "ipopt.tol": 1e-4,
+            "ipopt.max_iter": 25,
+            "ipopt.linear_solver": "mumps",
+            "acados_nlp_solver": "SQP_RTI",
+            "acados_integrator": "ERK",
+            "acados_cost_discretization": "EULER",
+            "acados_qp_solver": "PARTIAL_CONDENSING_HPIPM",
+            "acados_globalization": "MERIT_BACKTRACKING",
+            "acados_tol": 1e-3,
+            "acados_qp_tol": 1e-3,
+        },
     ):
+        self.solver_options = solver_options
         self.useSoftConstraints = optimizer_info.get("useSoftConstraints", True)
         self.softPenalty = optimizer_info.get("softPenalty", 1e3)
         self.dynamics = dynamics
         self.n_horizon = dynamics.n_horizon
         self.ts = dynamics.ts
-        self.costs = costs
         self.nx = dynamics.nx
         self.nu = dynamics.nu
         self.ny = dynamics.ny
@@ -75,7 +87,6 @@ class IPOPTOptimizer(BaseOptimizer):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
@@ -84,7 +95,7 @@ class IPOPTOptimizer(BaseOptimizer):
             "export_dir": "generated_code/mpc",
         },
     ):
-        super().__init__(dynamics, costs, optimizer_info)
+        super().__init__(dynamics, optimizer_info)
         self.setup_optimizer()
 
     def setup_optimizer(self):
@@ -134,15 +145,17 @@ class IPOPTOptimizer(BaseOptimizer):
                 else:
                     opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
 
-        ### Costs
+        ### Costs (All cost functions have args: x,u,p,x_ref,u_ref)
         cost = 0
-        stage_cost_function = self.costs.stageCostFunc
-        terminal_cost_function = self.costs.terminalCostFunc
+        stage_cost_function = self.dynamics.stageCostFunc
+        terminal_cost_function = self.dynamics.terminalCostFunc
 
         for k in range(self.n_horizon):
-            cost += stage_cost_function(X[:, k], U[:, k], X_ref[:, k], U_ref[:, k])
+            cost += stage_cost_function(X[:, k], U[:, k], None, X_ref[:, k], U_ref[:, k])
 
-        cost += terminal_cost_function(X[:, -1], X_ref[:, -1])  # Terminal cost
+        cost += terminal_cost_function(
+            X[:, -1], np.zeros((self.nu,)), None, X_ref[:, -1], np.zeros((self.nu,))
+        )  # Terminal cost
 
         # Add slack penalty to the cost function
         cost += slack_penalty * (ca.sumsqr(s_x) + ca.sumsqr(s_u))
@@ -150,10 +163,10 @@ class IPOPTOptimizer(BaseOptimizer):
 
         # Solver options
         opts = {
-            "ipopt.print_level": 0,
-            "ipopt.tol": 1e-4,
-            "ipopt.max_iter": 25,
-            "ipopt.linear_solver": "mumps",
+            "ipopt.print_level": self.solver_options.get("ipopt.print_level", 0),
+            "ipopt.tol": self.solver_options.get("ipopt.tol", 1e-4),
+            "ipopt.max_iter": self.solver_options.get("ipopt.max_iter", 25),
+            "ipopt.linear_solver": self.solver_options.get("ipopt.linear_solver", "mumps"),
         }
         opti.solver("ipopt", opts)
 
@@ -178,8 +191,8 @@ class IPOPTOptimizer(BaseOptimizer):
     def step(
         self,
         current_state: NDArray[np.floating],
-        x_ref: NDArray[np.floating],
-        u_ref: NDArray[np.floating],
+        x_ref: NDArray[np.floating] = None,
+        u_ref: NDArray[np.floating] = None,
     ) -> NDArray[np.floating]:
         """Performs one optimization step using the current state, reference trajectory, and the previous solution for warmstarting. Updates the previous solution and returns the control input."""
         # Unpack IPOPT variables
@@ -201,8 +214,10 @@ class IPOPTOptimizer(BaseOptimizer):
         # Set initial state
         opti.set_value(X0, current_state)
         # Set reference trajectory
-        opti.set_value(X_ref, x_ref)
-        opti.set_value(U_ref, u_ref)
+        if x_ref is not None:
+            opti.set_value(X_ref, x_ref)
+        if u_ref is not None:
+            opti.set_value(U_ref, u_ref)
         # Set state and control bounds
         opti.set_value(X_lb, self.dynamics.x_lb)
         opti.set_value(X_ub, self.dynamics.x_ub)
@@ -251,7 +266,6 @@ class AcadosOptimizer(BaseOptimizer):
     def __init__(
         self,
         dynamics: BaseDynamics,
-        costs: BaseCost,
         optimizer_info: dict = {
             "useSoftConstraints": True,
             "softPenalty": 1e3,
@@ -259,10 +273,22 @@ class AcadosOptimizer(BaseOptimizer):
             "useZoro": False,
             "export_dir": "generated_code/mpc",
             "json_file": "acados_ocp.json",
-            "IntegratorType": "ERK",
+        },
+        solver_options: dict = {
+            "ipopt.print_level": 0,
+            "ipopt.tol": 1e-4,
+            "ipopt.max_iter": 25,
+            "ipopt.linear_solver": "mumps",
+            "acados_nlp_solver": "SQP_RTI",
+            "acados_integrator": "ERK",
+            "acados_cost_discretization": "EULER",
+            "acados_qp_solver": "PARTIAL_CONDENSING_HPIPM",
+            "acados_globalization": "MERIT_BACKTRACKING",
+            "acados_tol": 1e-3,
+            "acados_qp_tol": 1e-3,
         },
     ):
-        super().__init__(dynamics, costs, optimizer_info)
+        super().__init__(dynamics, optimizer_info, solver_options)
         self.useGP = optimizer_info.get("useGP", False)
         self.useZoro = optimizer_info.get("useZoro", False)
         self.json_file = optimizer_info.get("json_file", "acados_ocp.json")
@@ -295,25 +321,37 @@ class AcadosOptimizer(BaseOptimizer):
         # Set solver options
         ocp.solver_options.N_horizon = self.n_horizon  # number of control intervals
         ocp.solver_options.tf = self.n_horizon * self.ts  # prediction horizon
-        ocp.solver_options.integrator_type = "ERK"  # "ERK", "IRK", "GNSF", "DISCRETE"
-        ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"  # FULL_CONDENSING_QPOASES
-        ocp.solver_options.hessian_approx = "GAUSS_NEWTON"  # "EXACT", "GAUSS_NEWTON"
-        ocp.solver_options.cost_discretization = "EULER"  # "INTEGRATOR", "EULER"
-        ocp.solver_options.nlp_solver_type = "SQP_RTI"  # SQP, SQP_RTI
-        ocp.solver_options.globalization = (
-            "MERIT_BACKTRACKING"  # "FIXED_STEP", "MERIT_BACKTRACKING"
+        ocp.solver_options.integrator_type = self.solver_options.get(
+            "acados_integrator", "ERK"
+        )  # "ERK", "IRK", "GNSF", "DISCRETE"
+        ocp.solver_options.qp_solver = self.solver_options.get(
+            "acados_qp_solver", "PARTIAL_CONDENSING_HPIPM"
         )
-        ocp.solver_options.tol = 1e-3  # tolerance
-        ocp.solver_options.qp_tol = 1e-3  # QP solver tolerance
+        # FULL_CONDENSING_QPOASES
+        ocp.solver_options.hessian_approx = "GAUSS_NEWTON"  # "EXACT", "GAUSS_NEWTON"
+        ocp.solver_options.cost_discretization = self.solver_options.get(
+            "acados_cost_discretization", "EULER"
+        )  # "INTEGRATOR", "EULER"
+        ocp.solver_options.nlp_solver_type = self.solver_options.get(
+            "acados_nlp_solver", "SQP_RTI"
+        )  # SQP, SQP_RTI
+        ocp.solver_options.globalization = self.solver_options.get(
+            "acados_globalization", "MERIT_BACKTRACKING"
+        )  # "FIXED_STEP", "MERIT_BACKTRACKING"
 
-        if self.costs.cost_type == "linear":
+        ocp.solver_options.tol = self.solver_options.get("acados_tol", 1e-3)  # NLP error tolerance
+        ocp.solver_options.qp_tol = self.solver_options.get(
+            "acados_qp_tol", 1e-3
+        )  # QP error tolerance
+
+        if self.dynamics.cost_dict["cost_type"] == "linear":
             # Linear LS: J = || Vx * (x - x_ref) ||_W^2 + || Vu * (u - u_ref) ||_W^2
             # J_e = || Vx_e * (x - x_ref) ||^2
             # Update y_ref and y_ref_e at each iteration, if needed
             ocp.cost.cost_type = "LINEAR_LS"
             ocp.cost.cost_type_e = "LINEAR_LS"
-            ocp.cost.W = scipy.linalg.block_diag(self.costs.Qs, self.costs.R)
-            ocp.cost.W_e = self.costs.Qt
+            ocp.cost.W = scipy.linalg.block_diag(self.dynamics.Qs, self.dynamics.R)
+            ocp.cost.W_e = self.dynamics.Qt
             # Dummy reference trajectory
             ocp.cost.yref = np.zeros((self.ny,))
             ocp.cost.yref_e = np.zeros((self.nx,))
@@ -327,20 +365,20 @@ class AcadosOptimizer(BaseOptimizer):
             Vu = np.zeros((self.ny, self.nu))
             Vu[self.nx :, :] = np.eye(self.nu)
             ocp.cost.Vu = Vu
-        elif self.costs.cost_type == "nonlinear":
+        elif self.dynamics.cost_type == "nonlinear":
             raise NotImplementedError("Nonlinear cost functions are not implemented yet.")
             # ocp.cost.cost_type = "NONLINEAR_LS"
             # ocp.cost.cost_type_e = "NONLINEAR_LS"
             # ocp.model.cost_y_expr = self.costs["cost_fcn"]
             # ocp.cost_expr_e = self.costs["cost_fcn"]
-        elif self.costs.cost_type == "external":
+        elif self.dynamics.cost_type == "external":
             ocp.cost.cost_type = "EXTERNAL"
             ocp.cost.cost_type_e = "EXTERNAL"
-            ocp.model.cost_expr_ext_cost = self.costs.stageCostFunc(
-                ocp.model.x, ocp.model.u, ocp.model.p[self.dynamics.param_indices["cost"]]
+            ocp.model.cost_expr_ext_cost = self.dynamics.stageCostFunc(
+                ocp.model.x, ocp.model.u, ocp.model.p
             )
-            ocp.model.cost_expr_ext_cost_e = self.costs.terminalCostFunc(
-                ocp.model.x, ocp.model.p[self.dynamics.param_indices["cost"]]
+            ocp.model.cost_expr_ext_cost_e = self.dynamics.terminalCostFunc(
+                ocp.model.x, np.zeros((self.nu,)), ocp.model.p
             )
         else:
             raise NotImplementedError("cost_type must be linear, nonlinear, or external.")
@@ -369,7 +407,7 @@ class AcadosOptimizer(BaseOptimizer):
             # upperSlackBounds are 1 by default, optimize if needed
 
             # Define slack variables
-            ocp.constraints.idxsbx = np.setdiff1d(np.arange(self.nx), self.dynamics.noSlackStates)
+            ocp.constraints.idxsbx = self.dynamics.slackStates
             nsx = len(ocp.constraints.idxsbx)
             ocp.constraints.lsbx = np.zeros((nsx,))
             ocp.constraints.usbx = np.ones((nsx,))
@@ -378,7 +416,7 @@ class AcadosOptimizer(BaseOptimizer):
             ocp.constraints.lsbx_e = ocp.constraints.lsbx
             ocp.constraints.usbx_e = ocp.constraints.usbx
 
-            ocp.constraints.idxsbu = np.setdiff1d(np.arange(self.nu), self.dynamics.noSlackControls)
+            ocp.constraints.idxsbu = self.dynamics.slackControls
             nsu = len(ocp.constraints.idxsbu)
             ocp.constraints.lsbu = np.zeros((nsu,))
             ocp.constraints.usbu = np.ones((nsu,))
@@ -424,8 +462,8 @@ class AcadosOptimizer(BaseOptimizer):
         self,
         current_state: NDArray[np.floating],
         obs: dict[str, NDArray[np.floating]],
-        x_ref: NDArray[np.floating],
-        u_ref: NDArray[np.floating],
+        x_ref: NDArray[np.floating] = None,
+        u_ref: NDArray[np.floating] = None,
     ) -> NDArray[np.floating]:
         """Performs one optimization step using the current state, reference trajectory, and the previous solution for warmstarting. Updates the previous solution and returns the control input."""
         # Transform the state and update the parameters
@@ -437,11 +475,12 @@ class AcadosOptimizer(BaseOptimizer):
         self.ocp_solver.set(0, "ubx", current_state)
 
         # Set reference trajectory
-        y_ref = np.vstack([x_ref[:, :-1], u_ref])
-        y_ref_e = x_ref[:, -1]
-        for i in range(self.n_horizon):
-            self.ocp_solver.set(i, "yref", y_ref[:, i])
-        self.ocp_solver.set(self.n_horizon, "yref", y_ref_e)
+        if self.costs.cost_type != "external":
+            y_ref = np.vstack([x_ref[:, :-1], u_ref])
+            y_ref_e = x_ref[:, -1]
+            for i in range(self.n_horizon):
+                self.ocp_solver.set(i, "yref", y_ref[:, i])
+            self.ocp_solver.set(self.n_horizon, "yref", y_ref_e)
 
         # Set initial guess (u_guess/x_guess are the previous solution moved one step forward)
         self.ocp_solver.set(0, "x", current_state)
@@ -489,21 +528,11 @@ class AcadosOptimizer(BaseOptimizer):
 
     def updateParameters(self, obs):
         """Update the obstacle constraints based on the current obstacle positions."""
-        params = self.dynamics.param_values
+        update = self.dynamics.updateParameters(obs)
 
-        # Update obstacle constraints
-        obstacles_visited = obs.get("obstacles_visited", self.dynamics.obstacle_visited)
-        if np.array_equal(obstacles_visited, self.dynamics.obstacle_visited):
-            pass
-        else:
-            self.dynamics.obstacle_visited = obstacles_visited
-            self.dynamics.obstacle_pos = obs.get("obstacles_pos", self.dynamics.obstacle_pos)
-
-        params[self.dynamics.param_indices["p_obst"]] = self.dynamics.obstacle_pos.flatten()
-
-        # Update the parameters in the solver
-        for stage in range(self.n_horizon + 1):
-            self.ocp_solver.set(stage, "p", params)
-        # Update the parameter values in the dynamics model
-        self.dynamics.param_values = params
+        if update:
+            params = self.dynamics.param_values
+            # Update the parameters in the solver
+            for stage in range(self.n_horizon + 1):
+                self.ocp_solver.set(stage, "p", params)
         return None

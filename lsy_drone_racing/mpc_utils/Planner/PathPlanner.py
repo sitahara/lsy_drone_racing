@@ -4,20 +4,80 @@ from scipy.interpolate import splev, splprep
 from scipy.interpolate import CubicHermiteSpline
 from scipy.spatial.transform import Rotation as Rot
 from typing import Dict, Any
+from mpc_utils.utils import Rbi
 
 
 class HermiteSplinePathPlanner:
-    def __init__(self, gates_pos, gates_rpy, start_pos, start_rpy, progress):
+    def __init__(
+        self,
+        p,
+        param_indices,
+        current_param_index,
+        gates_pos,
+        gates_rpy,
+        start_pos,
+        start_rpy,
+        progress,
+    ):
+        self.num_gates = gates_pos.shape[0]
+        self.progress = progress
+
         self.gates_pos = gates_pos
         self.gates_rpy = gates_rpy
         self.start_pos = start_pos
         self.start_rpy = start_rpy
-        self.progress = progress
+
+        # Define symbolic parameters for gate/start positions and orientations
+        self.start_pos_sym = ca.MX.sym("start_pos", 3)
+        self.start_rpy_sym = ca.MX.sym("start_rpy", 3)
+        self.gates_pos_sym = ca.MX.sym("gates_pos", self.num_gates, 3)
+        self.gates_rpy_sym = ca.MX.sym("gates_rpy", self.num_gates, 3)
+        self.gate_progresses_sym = ca.MX.sym("gate_progresses", self.num_gates)
+
+        # Combine all symbolic parameters into a single path parameter vector
+        p_path = ca.vertcat(
+            self.start_pos_sym,
+            self.start_rpy_sym,
+            ca.reshape(self.gates_pos_sym, -1, 1),
+            ca.reshape(self.gates_rpy_sym, -1, 1),
+            self.gate_progresses_sym,
+        )
+        if p is not None:
+            p = ca.vertcat(p, p_path)
+        else:
+            p = p_path
+        # Add the indices of the path parameters to the dictionary
+        param_indices["start_pos"] = np.arange(current_param_index, current_param_index + 3)
+        current_param_index += 3
+        param_indices["start_rpy"] = np.arange(current_param_index, current_param_index + 3)
+        current_param_index += 3
+        param_indices["gates_pos"] = np.arange(
+            current_param_index, current_param_index + self.num_gates * 3
+        )
+        current_param_index += self.num_gates * 3
+        param_indices["gates_rpy"] = np.arange(
+            current_param_index, current_param_index + self.num_gates * 3
+        )
+        current_param_index += self.num_gates * 3
+        param_indices["gate_progresses"] = np.arange(
+            current_param_index, current_param_index + self.num_gates
+        )
+        current_param_index += self.num_gates
+
+        # Store the parameters and indices. Is copied by the dynamics class
+        self.p = p
+        self.param_indices = param_indices
+        self.current_param_index = current_param_index
+
+        # Create Hermite spline with symbolic parameters
         self.path_func, self.dpath_func, self.ddpath_func = self.create_hermite_spline()
-        self.gate_progresses = self.calculate_gate_progresses()
+
+        # Initialize gate progresses
+        self.gate_progresses = self.calculate_gate_progresses(
+            gates_pos, gates_rpy, start_pos, start_rpy
+        )
 
     def create_hermite_spline(self):
-        num_gates = self.gates_pos.shape[0]
         theta = self.progress
 
         # Hermite spline coefficients
@@ -34,18 +94,20 @@ class HermiteSplinePathPlanner:
         ddpath = ca.MX.zeros(3)
 
         # Normalize theta to [0, 1] for the entire path
-        theta_norm = theta * num_gates
+        theta_norm = theta * (self.num_gates + 1)
 
-        # Compute tangent vectors from rpy
-        tangents = self.compute_normals(np.vstack((self.start_rpy, self.gates_rpy)))
+        # Combine start, gates, and end positions and orientations
+        positions = ca.vertcat(self.start_pos_sym, self.gates_pos_sym, self.start_pos_sym)
+        orientations = ca.vertcat(self.start_rpy_sym, self.gates_rpy_sym, self.start_rpy_sym)
 
-        # Include start position and orientation
-        p0 = self.start_pos
-        m0 = tangents[0]
+        # Compute tangent vectors from rpy (for matching orientation at each gate)
+        tangents = self.compute_normals(orientations)
 
-        for i in range(num_gates):
-            p1 = self.gates_pos[i]
-            m1 = tangents[i + 1]  # Tangent at p1
+        for i in range(self.num_gates + 1):
+            p0 = positions[i, :]
+            p1 = positions[i + 1, :]
+            m0 = tangents[i, :]
+            m1 = tangents[i + 1, :]
 
             # Normalize theta to [0, 1] for each segment
             t = (theta_norm - i) / (i + 1 - i)
@@ -60,41 +122,110 @@ class HermiteSplinePathPlanner:
             dpath += ca.if_else((theta_norm >= i) & (theta_norm < i + 1), segment_dpath, 0)
             ddpath += ca.if_else((theta_norm >= i) & (theta_norm < i + 1), segment_ddpath, 0)
 
-            # Update p0 and m0 for the next segment
-            p0 = p1
-            m0 = m1
-
-        path_func = ca.Function("path", [theta], [path])
-        dpath_func = ca.Function("dpath", [theta], [dpath])
-        ddpath_func = ca.Function("ddpath", [theta], [ddpath])
+        path_func = ca.Function(
+            "path",
+            [theta, self.start_pos_sym, self.start_rpy_sym, self.gates_pos_sym, self.gates_rpy_sym],
+            [path],
+        )
+        dpath_func = ca.Function(
+            "dpath",
+            [theta, self.start_pos_sym, self.start_rpy_sym, self.gates_pos_sym, self.gates_rpy_sym],
+            [dpath],
+        )
+        ddpath_func = ca.Function(
+            "ddpath",
+            [theta, self.start_pos_sym, self.start_rpy_sym, self.gates_pos_sym, self.gates_rpy_sym],
+            [ddpath],
+        )
 
         return path_func, dpath_func, ddpath_func
 
     def compute_normals(self, orientations):
         """Compute the normal vectors from the orientations."""
         normals = []
-        for orientation in orientations:
-            rot = Rot.from_euler("xyz", orientation)
-            normal = rot.apply([1, 0, 0])  # Assuming the normal is along the x-axis
+        for i in range(orientations.shape[0]):
+            orientation = orientations[i, :]
+            rot = ca.MX.zeros(3, 3)
+            roll, pitch, yaw = orientation[0], orientation[1], orientation[2]
+            rot[0, 0] = ca.cos(yaw) * ca.cos(pitch)
+            rot[0, 1] = ca.cos(yaw) * ca.sin(pitch) * ca.sin(roll) - ca.sin(yaw) * ca.cos(roll)
+            rot[0, 2] = ca.cos(yaw) * ca.sin(pitch) * ca.cos(roll) + ca.sin(yaw) * ca.sin(roll)
+            rot[1, 0] = ca.sin(yaw) * ca.cos(pitch)
+            rot[1, 1] = ca.sin(yaw) * ca.sin(pitch) * ca.sin(roll) + ca.cos(yaw) * ca.cos(roll)
+            rot[1, 2] = ca.sin(yaw) * ca.sin(pitch) * ca.cos(roll) - ca.cos(yaw) * ca.sin(roll)
+            rot[2, 0] = -ca.sin(pitch)
+            rot[2, 1] = ca.cos(pitch) * ca.sin(roll)
+            rot[2, 2] = ca.cos(pitch) * ca.cos(roll)
+            normal = rot[:, 0]  # Assuming the normal is along the x-axis
             normals.append(normal)
-        return np.array(normals)
+        return ca.vertcat(*normals)
+        # for orientation in orientations:
+        #     rot = Rot.from_euler("xyz", orientation)
+        #     normal = rot.apply([1, 0, 0])  # Assuming the normal is along the x-axis
+        #     normals.append(normal)
+        # return np.array(normals)
 
-    def calculate_gate_progresses(self):
-        num_gates = self.gates_pos.shape[0]
-        gate_progresses = np.zeros(num_gates)
+    def calculate_gate_progresses(self, gates_pos, gates_rpy, start_pos, start_rpy):
+        num_gates = gates_pos.shape[0]
+        gate_progresses = ca.MX.zeros(num_gates)
         for i in range(num_gates):
-            gate_pos = self.gates_pos[i]
+            gate_pos = gates_pos[i]
             # Find the progress value that minimizes the distance to the gate position
             progress_values = np.linspace(0, 1, 1000)
-            distances = [np.linalg.norm(self.path_func(p) - gate_pos) for p in progress_values]
+            distances = [
+                ca.norm_2(self.path_func(p, start_pos, start_rpy, gates_pos, gates_rpy) - gate_pos)
+                for p in progress_values
+            ]
             gate_progresses[i] = progress_values[np.argmin(distances)]
         return gate_progresses
 
     def update_gates(self, gates_pos, gates_rpy):
         self.gates_pos = gates_pos
         self.gates_rpy = gates_rpy
-        self.path_func, self.dpath_func, self.ddpath_func = self.create_hermite_spline()
-        self.gate_progresses = self.calculate_gate_progresses()
+        self.gate_progresses = self.calculate_gate_progresses(
+            self.gates_pos, self.gates_rpy, self.start_pos, self.start_rpy
+        )
+
+    def computeProgress(self, current_pos, current_vel, num_samples=100):
+        """Compute the current progress and progress rate along the path."""
+        # Discretize the path
+        progress_samples = np.linspace(0, 1, num_samples)
+        path_positions = np.array(
+            [
+                self.path_func(p, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy)
+                for p in progress_samples
+            ]
+        )
+
+        # Compute the distances from the current position to each sampled point
+        distances = np.linalg.norm(path_positions - current_pos, axis=1)
+
+        # Find the index of the closest point
+        closest_index = np.argmin(distances)
+        closest_progress = progress_samples[closest_index]
+
+        # Optionally, interpolate between the closest points for more accuracy
+        if closest_index > 0 and closest_index < num_samples - 1:
+            prev_progress = progress_samples[closest_index - 1]
+            next_progress = progress_samples[closest_index + 1]
+            prev_pos = path_positions[closest_index - 1]
+            next_pos = path_positions[closest_index + 1]
+
+            # Linear interpolation
+            t = np.dot(current_pos - prev_pos, next_pos - prev_pos) / np.dot(
+                next_pos - prev_pos, next_pos - prev_pos
+            )
+            closest_progress = prev_progress + t * (next_progress - prev_progress)
+
+        # Compute the path tangent at the closest progress
+        path_tangent = self.dpath_func(
+            closest_progress, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy
+        )
+
+        # Compute the progress rate as the projection of the current velocity onto the path tangent
+        progress_rate = np.dot(current_vel, path_tangent) / np.linalg.norm(path_tangent)
+
+        return closest_progress, progress_rate
 
 
 class PathPlanner:
