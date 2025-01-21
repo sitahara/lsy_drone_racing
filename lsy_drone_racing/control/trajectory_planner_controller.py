@@ -1,12 +1,9 @@
-"""Controller that follows a pre-defined trajectory.
+"""Controller that follows a dynamically planned trajectory.
 
-It uses a cubic spline interpolation to generate a smooth trajectory through a series of waypoints.
-At each time step, the controller computes the next desired position by evaluating the spline.
+It uses a spline-curve based planner, whose details are in planner/planner_core.py.
+At each time step, the controller computes the next desired position by executing the planner and 
+setting a point in the planned trajectory as the desired position.
 
-.. note::
-    The waypoints are hard-coded in the controller for demonstration purposes. In practice, you
-    would need to generate the splines adaptively based on the track layout, and recompute the
-    trajectory if you receive updated gate and obstacle poses.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class TrajectoryController(BaseController):
-    """Controller that follows a pre-defined trajectory."""
+    """Controller that follows a planned trajectory."""
 
     def __init__(self, initial_obs: dict[str, NDArray[np.floating]], initial_info: dict):
         """Initialization of the controller.
@@ -35,9 +32,13 @@ class TrajectoryController(BaseController):
             initial_info: Additional environment information from the reset.
         """
         super().__init__(initial_obs, initial_info)
-        self.planner = Planner(DEBUG=True)
         self._tick = 0
         self._freq = initial_info["env_freq"]
+
+        self.DEBUG = True # Toggles the debug display
+        self.SAMPLE_IDX = 8 # Controls how much farther the desired position will be
+
+        self.planner = Planner(DEBUG=self.DEBUG)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
@@ -65,28 +66,31 @@ class TrajectoryController(BaseController):
         result_path, ref_path, _ = self.planner.plan_path_from_observation(
             gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
         )
-        if self._tick % 10 == 0:
-            for i in range(len(result_path.x) - 1):
-                p.addUserDebugLine(
-                    [result_path.x[i], result_path.y[i], result_path.z[i]],
-                    [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
-                    lineColorRGB=[1, 0, 0],  # Red color
-                    lineWidth=2,
-                    lifeTime=0,  # 0 means the line persists indefinitely
-                    physicsClientId=0,
-                )
-        if self._tick % 100 == 0:
-            for i in range(len(ref_path.x_sampled) - 1):
-                p.addUserDebugLine(
-                    [ref_path.x_sampled[i], ref_path.y_sampled[i], 0.0],
-                    [ref_path.x_sampled[i + 1], ref_path.y_sampled[i + 1], 0.0],
-                    lineColorRGB=[0, 1, 1],  # Red color
-                    lineWidth=2,
-                    lifeTime=0,  # 0 means the line persists indefinitely
-                    physicsClientId=0,
-                )
+
+        # debug display on pybullet GUI
+        if self.DEBUG is True:
+            if self._tick % 10 == 0:
+                for i in range(len(result_path.x) - 1):
+                    p.addUserDebugLine(
+                        [result_path.x[i], result_path.y[i], result_path.z[i]],
+                        [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
+                        lineColorRGB=[1, 0, 0],  # Red color
+                        lineWidth=2,
+                        lifeTime=0,  # 0 means the line persists indefinitely
+                        physicsClientId=0,
+                    )
+            if self._tick % 100 == 0:
+                for i in range(len(ref_path.x_sampled) - 1):
+                    p.addUserDebugLine(
+                        [ref_path.x_sampled[i], ref_path.y_sampled[i], 0.0],
+                        [ref_path.x_sampled[i + 1], ref_path.y_sampled[i + 1], 0.0],
+                        lineColorRGB=[0, 1, 1],  # Red color
+                        lineWidth=2,
+                        lifeTime=0,  # 0 means the line persists indefinitely
+                        physicsClientId=0,
+                    )
         return np.concatenate(
-            (np.array([result_path.x[-1], result_path.y[-1], result_path.z[-1]]), np.zeros(10))
+            (np.array([result_path.x[self.SAMPLE_IDX], result_path.y[self.SAMPLE_IDX], result_path.z[self.SAMPLE_IDX]]), np.zeros(10))
         )
 
     def step_callback(
