@@ -1,0 +1,57 @@
+[dynamics_info]
+Interface = "Mellinger"
+ts = 1 / 60
+n_horizon = 60
+ControlType = "Thrusts"
+BaseDynamics = "MPCC"
+useControlRates = True
+ObstacleConstraints = True
+usePredict = False
+t_predict = 0.05
+useDrags = False
+onlyBaseInit = False
+
+
+[cost_info]
+cost_type = "linear"
+Qs_pos = 1 
+Qs_vel = 0.1
+Qs_ang = 0.1
+Qs_dang = 0.1
+Qs_quat = 0.01
+Rs = 0.01
+Rd = 0.01
+
+[cost_info_mpcc]
+cost_type = "mpcc"
+Ql = 1
+Qc = 1
+Qw = 1
+Qmu = 1
+Rdf = 0.01
+Rdprogress = 0.1
+
+[tunnel_info]
+Wn = 0.3
+Wgate = 0.1
+
+[optimizer_info]
+useSoftConstraints = True
+softPenalty = 1e3
+useGP = False
+useZoro = False
+export_dir ="generated_code/mpc"
+json_file = "acados_ocp.json"
+
+[solver_options]
+ipopt.print_level= 0
+ipopt.tol= 1e-4
+ipopt.max_iter= 25
+ipopt.linear_solver= "mumps"
+acados_nlp_solver= "SQP_RTI"
+acados_integrator= "ERK"
+acados_cost_discretization= "EULER"
+acados_qp_solver= "PARTIAL_CONDENSING_HPIPM"
+acados_globalization= "MERIT_BACKTRACKING"
+acados_tol= 1e-3
+acados_qp_tol= 1e-3
