@@ -10,11 +10,6 @@ class BaseDynamics(ABC):
         """Initialization of the key dictionaries."""
 
     @abstractmethod
-    def setupDynamics(self):
-        """Setup the dynamics of the drone/environment."""
-        pass
-
-    @abstractmethod
     def transformState(self, x: np.ndarray) -> np.ndarray:
         """Transforms observations from the environment to the respective states used in the dynamics."""
         pass

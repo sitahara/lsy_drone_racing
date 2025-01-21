@@ -75,7 +75,7 @@ class AcadosOptimizer(BaseOptimizer):
             "acados_qp_tol", 1e-3
         )  # QP error tolerance
 
-        if self.dynamics.cost_dict["cost_type"] == "linear":
+        if self.dynamics.cost_type == "linear":
             # Linear LS: J = || Vx * (x - x_ref) ||_W^2 + || Vu * (u - u_ref) ||_W^2
             # J_e = || Vx_e * (x - x_ref) ||^2
             # Update y_ref and y_ref_e at each iteration, if needed

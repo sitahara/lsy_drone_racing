@@ -24,7 +24,7 @@ class MPC(BaseController):
         self,
         initial_obs: NDArray[np.floating],
         initial_info: dict,
-        config_path: str = "lsy_drone_racing/mpc_utils/config.yaml",
+        config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
@@ -37,12 +37,17 @@ class MPC(BaseController):
         cost_info = config["cost_info"]
         optimizer_info = config["optimizer_info"]
         solver_options = config["solver_options"]
+        constraints_info = config["constraints_info"]
 
         # Init Dynamics including control bounds
         if dynamics_info["BaseDynamics"] == "MPCCppDynamics":
-            self.dynamics = MPCCppDynamics(initial_info, initial_obs, dynamics_info, cost_info)
+            self.dynamics = MPCCppDynamics(
+                initial_info, initial_obs, dynamics_info, constraints_info, cost_info
+            )
         else:
-            self.dynamics = DroneDynamics(initial_info, initial_obs, dynamics_info)
+            self.dynamics = DroneDynamics(
+                initial_info, initial_obs, dynamics_info, constraints_info, cost_info
+            )
 
         # # Init reference trajectory
         # if not additonal_info["dynamics_info"]["dynamics"] == "ThrustTime":
@@ -93,12 +98,14 @@ class MPC(BaseController):
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
         self.updateTargetTrajectory()
         if self.opt is None:
-            action = self.ipopt.step(self.current_state, self.costs.x_ref, self.costs.u_ref)
+            action = self.ipopt.step(self.current_state, self.dynamics.x_ref, self.dynamics.u_ref)
         else:
-            action = self.opt.step(self.current_state, obs, self.costs.x_ref, self.costs.u_ref)
+            action = self.opt.step(
+                self.current_state, obs, self.dynamics.x_ref, self.dynamics.u_ref
+            )
 
         print(f"Current position: {self.current_state[:3]}")
-        print(f"Desired position: {self.costs.x_ref[:3, 1]}")
+        print(f"Desired position: {self.dynamics.x_ref[:3, 1]}")
         print(f"Next position: {action[:3]}")
 
         return action.flatten()
@@ -158,7 +165,7 @@ class MPC(BaseController):
             n_repeat = np.sum(t_horizon > self.t_total)
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
-        self.costs.x_ref[:3, :] = pos_des
+        self.dynamics.x_ref[:3, :] = pos_des
         self.n_step += 1
         return None
 

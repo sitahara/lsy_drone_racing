@@ -54,10 +54,10 @@ class DroneDynamics(BaseDynamics):
         self,
         initial_obs: dict[str, NDArray[np.floating]],
         initial_info: dict,
-        config_path: str = None,
+        dynamics_info: dict,
+        constraints_info: dict,
+        cost_info: dict,
         onlyBaseInit: bool = False,
-        cost_info: dict = None,
-        dynamics_info: dict = None,
     ):
         """Initialization of the dynamics constraints.
 
@@ -106,14 +106,9 @@ class DroneDynamics(BaseDynamics):
         super().__init__()
         self.initial_obs = initial_obs
         self.initial_info = initial_info
-        if cost_info or dynamics_info is None:
-            if config_path is None:
-                config_path = os.path.join(os.path.dirname(__file__), "..", "config.toml")
-            config = toml.load(config_path)
-            if cost_info is None:
-                self.cost_info = config["cost_info"]
-            if dynamics_info is None:
-                dynamics_info = config["dynamics_info"]
+        self.cost_info = cost_info
+        self.dynamics_info = dynamics_info
+        self.constraints_info = constraints_info
 
         # Unpack the dynamics info
         self.n_horizon = dynamics_info.get("n_horizon", 60)
@@ -138,7 +133,7 @@ class DroneDynamics(BaseDynamics):
         self.useDrags = dynamics_info.get("useDrags", False)
 
         # Constraints
-        self.useObstacleConstraints = dynamics_info.get("ObstacleConstraints", True)
+        self.useObstacleConstraints = constraints_info.get("ObstacleConstraints", True)
         # Initial values of the obstacles and gates
         self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
         self.obstacle_diameter = self.initial_info.get("obstacle_diameter", 0.1)
@@ -490,7 +485,7 @@ class DroneDynamics(BaseDynamics):
         else:
             raise ValueError("Base dynamics not recognized.")
 
-        if self.dynamics.useControlRates:
+        if self.useControlRates:
             Qs = np.concatenate([Qs, Rs])
             Qt = np.concatenate([Qt, Rs])
             R = Rd
@@ -500,9 +495,9 @@ class DroneDynamics(BaseDynamics):
         self.Qs = np.diag(Qs)
         self.Qt = np.diag(Qt)
         self.R = np.diag(R)
-        self.x_ref = np.tile(self.x_eq.reshape(self.dynamics.nx, 1), self.n_horizon + 1)
+        self.x_ref = np.tile(self.x_eq.reshape(self.nx, 1), self.n_horizon + 1)
         # print(self.x_ref.shape)
-        self.u_ref = np.tile(self.u_eq.reshape(self.dynamics.nu, 1), self.n_horizon)
+        self.u_ref = np.tile(self.u_eq.reshape(self.nu, 1), self.n_horizon)
         # print(self.u_ref.shape)
         self.stageCostFunc = self.LQ_stageCost
         self.terminalCostFunc = self.LQ_terminalCost
@@ -513,7 +508,7 @@ class DroneDynamics(BaseDynamics):
             [(u - u_ref).T, self.R, u - u_ref]
         )
 
-    def LQ_terminalCost(self, x, p, x_ref=None, u_ref=None):
+    def LQ_terminalCost(self, x, u, p, x_ref=None, u_ref=None):
         """Compute the LQR cost."""
         return ca.mtimes([(x - x_ref).T, self.Qt, x - x_ref])
 
@@ -523,12 +518,16 @@ class DroneDynamics(BaseDynamics):
         updated = False
         if init:
             self.param_values = np.zeros((self.p.size()[0],))
-            self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos.flatten()
+            self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                :, :-1
+            ].flatten()
         else:
             if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
-                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos.flatten()
+                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                    :, -1
+                ].flatten()
                 updated = True
         return updated
 
@@ -557,9 +556,9 @@ class DroneDynamics(BaseDynamics):
             self.nl_constr_uh = np.concatenate([self.nl_constr_uh, quat_constraints_uh])
 
         self.nl_constr_indices["quat"] = np.arange(
-            self.current_nl_constr_index, quat_constraints_lh.size()[0]
+            self.current_nl_constr_index, quat_constraints_lh.__len__()
         )
-        self.current_nl_constr_index += quat_constraints_lh.size()[0]
+        self.current_nl_constr_index += quat_constraints_lh.__len__()
         # No parameters required for the quaternion constraints
 
     def setupObstacleConstraints(self):
@@ -596,10 +595,8 @@ class DroneDynamics(BaseDynamics):
             self.nl_constr_lh = np.concatenate([self.nl_constr_lh, obstacle_constraints_lh])
             self.nl_constr_uh = np.concatenate([self.nl_constr_uh, obstacle_constraints_uh])
 
-        self.nl_constr_indices["obstacles"] = np.arange(
-            self.current_nl_constr_index, obstacle_constraints.size()[0]
-        )
-        self.current_nl_constr_index += obstacle_constraints.size()[0]
+        self.nl_constr_indices["obstacles"] = np.arange(self.current_nl_constr_index, num_obstacles)
+        self.current_nl_constr_index += num_obstacles
         # Add the obstacle parameters to the parameter vector
         self.p = ca.vertcat(self.p, obstacles_pos_sym) if self.p is not None else obstacles_pos_sym
         self.param_indices["obstacles_pos"] = np.arange(
@@ -687,7 +684,7 @@ class DroneDynamics(BaseDynamics):
         self.x_ub = x_ub
         self.x_scal = self.x_ub - self.x_lb
         self.slackStates = np.concatenate(
-            self.state_indices["pos"], self.state_indices["w"]
+            [self.state_indices["pos"], self.state_indices["w"]]
         )  # Slack variables on z_pos, w, and quat
 
         if any(x_ub - x_lb < 0):

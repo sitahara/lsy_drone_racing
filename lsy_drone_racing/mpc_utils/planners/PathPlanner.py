@@ -4,7 +4,6 @@ from scipy.interpolate import splev, splprep
 from scipy.interpolate import CubicHermiteSpline
 from scipy.spatial.transform import Rotation as Rot
 from typing import Dict, Any
-from mpc_utils.utils import Rbi
 
 
 class HermiteSplinePathPlanner:

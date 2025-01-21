@@ -1,16 +1,13 @@
 [dynamics_info]
 Interface = "Mellinger"
-ts = 1 / 60
+ts = 0.16666666
 n_horizon = 60
 ControlType = "Thrusts"
-BaseDynamics = "MPCC"
-useControlRates = True
-ObstacleConstraints = True
-usePredict = False
+BaseDynamics = "Quaternion"
+useControlRates = true
+usePredict = false
 t_predict = 0.05
-useDrags = False
-onlyBaseInit = False
-
+useDrags = false
 
 [cost_info]
 cost_type = "linear"
@@ -31,15 +28,18 @@ Qmu = 1
 Rdf = 0.01
 Rdprogress = 0.1
 
-[tunnel_info]
+[constraints_info]
+ObstacleConstraints = true
+obstacle_diameter = 0.1
+tunnel_constraints = true
 Wn = 0.3
 Wgate = 0.1
 
 [optimizer_info]
-useSoftConstraints = True
+useSoftConstraints = true
 softPenalty = 1e3
-useGP = False
-useZoro = False
+useGP = false
+useZoro = false
 export_dir ="generated_code/mpc"
 json_file = "acados_ocp.json"
 

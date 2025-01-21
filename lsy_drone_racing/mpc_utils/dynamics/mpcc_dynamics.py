@@ -26,24 +26,18 @@ from .drone_dynamics import DroneDynamics
 
 
 class MPCCppDynamics(DroneDynamics):
-    def __init__(self, initial_obs, initial_info, config_path: str = None):
-        # Load the configuration file
-        if config_path is None:
-            config_path = os.path.join(os.path.dirname(__file__), "..", "config.toml")
-        config = toml.load(config_path)
-        self.cost_info = config["cost_info_mpcc"]
-        self.dynamics_info = config["dynamics_info"]
-        tunnel_info = config["tunnel_info"]
-        self.Wn = tunnel_info.get("Wn", 0.3)
-        self.Wgate = tunnel_info.get("Wgate", 0.1)
+    def __init__(self, initial_obs, initial_info, dynamics_info, constraints_info, cost_info):
         super().__init__(
             initial_obs,
             initial_info,
-            config_path,
+            dynamics_info=dynamics_info,
+            constraints_info=constraints_info,
+            cost_info=cost_info,
             onlyBaseInit=True,
-            cost_info=self.cost_info,
-            dynamics_info=self.dynamics_info,
         )
+        self.Wn = self.constraints_info.get("Wn", 0.3)
+        self.Wn = self.constraints_info.get("Wgate", 0.1)
+
         # Setup the Dynamics, returns expressions for the continuous dynamics
         self.setup_dynamics()
         # Defines the bounds and scaling factors for the states and controls, and which states/controls have slack variables
