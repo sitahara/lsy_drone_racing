@@ -22,8 +22,8 @@ class Planner:
         D_ROAD_W: float = 0.1,
         DT: float = 0.03,
         NUM_POINTS: int = 20,
-        K_J: float = 0.5,
-        K_D: float = 8.0,
+        SAFETY_MARGIN: float = 0.05,
+        USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
     ):
         """Initializes the planner core.
@@ -45,6 +45,11 @@ class Planner:
             Weight constant for the trajectory's jerk.
         K_D : float
             Weight constant for the terminal deviation from the desired trajectory.
+        SAFETY_MARGIN:
+                Planned trajectory tries to take this much margin from obstacles.
+        USE_QUINTIC_SPLINE:
+            If True, uses quintic spline curve as the candidate trajectory in frenet frame.
+            Otherwise uses lines
         DEBUG : bool
             Enables or disables display of planning information on a separate matplotlib window.
         """
@@ -59,6 +64,8 @@ class Planner:
             T_PRED=T_PRED,
             K_J=K_J,
             K_D=K_D,
+            SAFETY_MARGIN=SAFETY_MARGIN,
+            USE_QUINTIC_SPLINE=USE_QUINTIC_SPLINE,
             DEBUG=DEBUG,
         )
         self.DEBUG = DEBUG
