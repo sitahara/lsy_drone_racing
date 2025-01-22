@@ -22,6 +22,8 @@ class Planner:
         D_ROAD_W: float = 0.1,
         DT: float = 0.03,
         NUM_POINTS: int = 20,
+        K_J: float = 0.5,
+        K_D: float = 15.0,
         SAFETY_MARGIN: float = 0.05,
         USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
