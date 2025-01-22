@@ -42,6 +42,8 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
         useGP: bool = False,
         useZoro: bool = False,
         json_file: str = "acados_ocp",
+        visualize: bool = False,
+        separate_thread: bool=False,
     ):
         """Initialize the MPC_ACADOS controller.
 
@@ -56,6 +58,8 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
         self.useGP = useGP
         self.useZoro = useZoro
         self.json_file = json_file
+        self.visualize = visualize
+        self.separate_thread = separate_thread
 
         # Define the dynamics model, constraints, and cost matrices
         # super().setupDynamics() # This is already done in the base class
@@ -80,28 +84,30 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
         # Since the planner is slow, run the planner on a separate thread
         self.queue_state = queue.Queue()
         self.queue_trajectory = queue.Queue()
-        self.planner = Planner(MAX_ROAD_WIDTH=0.4, D_ROAD_W=0.1)
-
-        self.planner_thread = threading.Thread(target=self.do_planning, daemon=True)
+        self.planner = Planner(MAX_ROAD_WIDTH=0.5, D_ROAD_W=0.1,DT=0.015, NUM_POINTS=self.n_horizon, DEBUG=(visualize and not separate_thread))
         
-        ## Since the controller requires the existence of x_ref, we will plan once in advance
-        ## using initial observation
-        gate_x, gate_y, gate_z = (
-            initial_obs["gates_pos"][:, 0],
-            initial_obs["gates_pos"][:, 1],
-            initial_obs["gates_pos"][:, 2],
-        )
-        gate_yaw = initial_obs["gates_rpy"][:, 2]
-        obs_x, obs_y = initial_obs["obstacles_pos"][:, 0], initial_obs["obstacles_pos"][:, 1]
-        next_gate = initial_obs["target_gate"] + 1
-        drone_x, drone_y = initial_obs["pos"][0], initial_obs["pos"][1]
-        result_path, _, _ = self.planner.plan_path_from_observation(
-            gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
-        )
-        num_points = len(result_path.x)
-        self.x_ref[0, :num_points] = np.array(result_path.x)
-        self.x_ref[1, :num_points] = np.array(result_path.y)
-        self.x_ref[2, :num_points] = np.array(result_path.z)
+        if separate_thread:
+            ## Since the controller requires the existence of x_ref, we will plan once in advance
+            ## using initial observation
+            gate_x, gate_y, gate_z = (
+                initial_obs["gates_pos"][:, 0],
+                initial_obs["gates_pos"][:, 1],
+                initial_obs["gates_pos"][:, 2],
+            )
+            gate_yaw = initial_obs["gates_rpy"][:, 2]
+            obs_x, obs_y = initial_obs["obstacles_pos"][:, 0], initial_obs["obstacles_pos"][:, 1]
+            next_gate = initial_obs["target_gate"] + 1
+            drone_x, drone_y = initial_obs["pos"][0], initial_obs["pos"][1]
+            result_path, _, _ = self.planner.plan_path_from_observation(
+                gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+            )
+            num_points = len(result_path.x)
+            self.x_ref[0, :num_points] = np.array(result_path.x)
+            self.x_ref[1, :num_points] = np.array(result_path.y)
+            self.x_ref[2, :num_points] = np.array(result_path.z)
+
+            self.planner_thread = threading.Thread(target=self.do_planning, daemon=True)
+            self.planner_thread.start()
 
     def reset(self):
         """Reset the MPC controller to its initial state."""
@@ -455,44 +461,47 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
 
     def updateTargetTrajectory(self):
         """Overriding base class' target trajectory update."""
-        # Send latest observaton to the planner
-        self.queue_state.put_nowait(self.obs)
+        if self.separate_thread:
+            # Send latest observaton to the planner
+            self.queue_state.put_nowait(self.obs)
 
-        # Fetch latest plan
-        try:
-            result_path = self.queue_trajectory.get_nowait()
-            num_points = len(result_path.x)
-            self.x_ref[0, :num_points] = np.array(result_path.x)
-            self.x_ref[1, :num_points] = np.array(result_path.y)
-            self.x_ref[2, :num_points] = np.array(result_path.z)
-        except queue.Empty: # Trajectory queue is empty
-            pass # It's empty because we've fetched the latest trajectory - wait until we get the newest trajectory
-        # if self.n_step % 10 == 0:
-        #     gate_x, gate_y, gate_z = (
-        #         self.obs["gates_pos"][:, 0],
-        #         self.obs["gates_pos"][:, 1],
-        #         self.obs["gates_pos"][:, 2],
-        #     )
-        #     gate_yaw = self.obs["gates_rpy"][:, 2]
-        #     obs_x, obs_y = self.obs["obstacles_pos"][:, 0], self.obs["obstacles_pos"][:, 1]
-        #     next_gate = self.obs["target_gate"] + 1
-        #     drone_x, drone_y = self.obs["pos"][0], self.obs["pos"][1]
-        #     result_path, ref_path, _ = self.planner.plan_path_from_observation(
-        #         gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
-        #     )
-        #     l = len(result_path.x)
-        #     self.x_ref[0, :l] = np.array(result_path.x)
-        #     self.x_ref[1, :l] = np.array(result_path.y)
-        #     self.x_ref[2, :l] = np.array(result_path.z)
-        #     for i in range(len(result_path.x) - 1):
-        #         p.addUserDebugLine(
-        #             [result_path.x[i], result_path.y[i], result_path.z[i]],
-        #             [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
-        #             lineColorRGB=[0, 0, 1],  # Red color
-        #             lineWidth=2,
-        #             lifeTime=0,  # 0 means the line persists indefinitely
-        #             physicsClientId=0,
-        #         )
+            # Fetch latest plan
+            try:
+                result_path = self.queue_trajectory.get_nowait()
+                num_points = len(result_path.x)
+                self.x_ref[0, :num_points] = np.array(result_path.x)
+                self.x_ref[1, :num_points] = np.array(result_path.y)
+                self.x_ref[2, :num_points] = np.array(result_path.z)
+            except queue.Empty: # Trajectory queue is empty
+                pass # It's empty because we've fetched the latest trajectory - wait until we get the newest trajectory
+        else:
+            if self.n_step % 10 == 0:
+                gate_x, gate_y, gate_z = (
+                    self.obs["gates_pos"][:, 0],
+                    self.obs["gates_pos"][:, 1],
+                    self.obs["gates_pos"][:, 2],
+                )
+                gate_yaw = self.obs["gates_rpy"][:, 2]
+                obs_x, obs_y = self.obs["obstacles_pos"][:, 0], self.obs["obstacles_pos"][:, 1]
+                next_gate = self.obs["target_gate"] + 1
+                drone_x, drone_y = self.obs["pos"][0], self.obs["pos"][1]
+                result_path, ref_path, _ = self.planner.plan_path_from_observation(
+                    gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+                )
+                num_points = len(result_path.x)
+                self.x_ref[0, :num_points] = np.array(result_path.x)
+                self.x_ref[1, :num_points] = np.array(result_path.y)
+                self.x_ref[2, :num_points] = np.array(result_path.z)
+                if self.visualize:
+                    for i in range(len(result_path.x) - 1):
+                        p.addUserDebugLine(
+                            [result_path.x[i], result_path.y[i], result_path.z[i]],
+                            [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
+                            lineColorRGB=[0, 0, 1],  # Red color
+                            lineWidth=2,
+                            lifeTime=0,  # 0 means the line persists indefinitely
+                            physicsClientId=0,
+                        )
 
     def do_planning(self):
         """The planning function to be run on a separate thread."""
