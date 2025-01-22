@@ -23,7 +23,7 @@ from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
 from lsy_drone_racing.control.mpc_base import MPC_BASE
-from lsy_drone_racing.control.utils import W1
+from lsy_drone_racing.mpc_utils import W1
 from lsy_drone_racing.planner import ObservationManager, Planner
 
 # from lsy_drone_racing.sim.drone import Drone
@@ -383,7 +383,7 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
     def initObstacleConstraints(self, ocp: AcadosOcp) -> AcadosOcp:
         """Initialize the obstacle constraints."""
         self.obstacles_pos = self.initial_obs["obstacles_pos"]
-        self.obstacles_in_range = self.initial_obs["obstacles_in_range"]
+        self.obstacles_in_range = self.initial_obs["obstacles_visited"]
         self.obstacle_radius = 0.1
         self.obstacle_constraints = []
         num_obstacles = self.obstacles_pos.shape[0]
@@ -402,11 +402,11 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
     def updateObstacleConstraints(self):
         """Update the obstacle constraints based on the current obstacle positions."""
         if np.array_equal(
-            self.obs["obstacles_in_range"], self.obstacles_in_range
-        ) and np.array_equal(self.obs["gates_in_range"], self.gates_in_range):
+            self.obs["obstacles_visited"], self.obstacles_in_range
+        ) and np.array_equal(self.obs["gates_visited"], self.gates_in_range):
             return None
-        self.obstacles_in_range = self.obs["obstacles_in_range"]
-        self.gates_in_range = self.obs["gates_in_range"]
+        self.obstacles_in_range = self.obs["obstacles_visited"]
+        self.gates_in_range = self.obs["gates_visited"]
         self.obstacle_pos = self.obs["obstacles_pos"]
         self.gate_pos = self.obs["gates_pos"]
         params = np.concatenate(

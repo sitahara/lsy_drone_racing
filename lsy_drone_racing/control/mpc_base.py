@@ -673,10 +673,10 @@ class MPC_BASE(BaseController):
         self.ny = self.nx + self.nu  # number of
 
         self.obstacles_pos = self.initial_obs["obstacles_pos"]  # obstacles positions in
-        self.obstacles_in_range = self.initial_obs["obstacles_in_range"]
+        self.obstacles_in_range = self.initial_obs["obstacles_visited"]
         self.gates_pos = self.initial_obs["gates_pos"]
         self.gates_rpy = self.initial_obs["gates_rpy"]
-        self.gates_in_range = self.initial_obs["gates_in_range"]
+        self.gates_in_range = self.initial_obs["gates_visited"]
 
     def setupCostFunction(self):
         """Setup the cost function for the MPC controller."""
