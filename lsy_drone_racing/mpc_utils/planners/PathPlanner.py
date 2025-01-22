@@ -4,6 +4,8 @@ from scipy.interpolate import splev, splprep
 from scipy.interpolate import CubicHermiteSpline
 from scipy.spatial.transform import Rotation as Rot
 from typing import Dict, Any
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 
 class HermiteSplinePathPlanner:
@@ -235,6 +237,52 @@ class HermiteSplinePathPlanner:
         progress_rate = np.dot(current_vel, path_tangent) / np.linalg.norm(path_tangent)
 
         return closest_progress, progress_rate
+
+    def testPath(self):
+        progress_samples = np.linspace(0, 1, 10000)
+        test_pos = self.path_func(
+            0.1, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy
+        )
+        print(np.array(test_pos).shape)
+        path_positions = np.array(
+            [
+                self.path_func(p, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy)
+                for p in progress_samples
+            ]
+        )
+        # dpath_positions = np.array(
+        #     [
+        #         self.dpath_func(p, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy)
+        #         for p in progress_samples
+        #     ]
+        # ).reshape(-1, 3)
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+
+        # Plot the path positions
+        ax.plot(path_positions[:, 0], path_positions[:, 1], path_positions[:, 2], label="Path")
+
+        # Plot the start position
+        ax.scatter(
+            self.start_pos[0], self.start_pos[1], self.start_pos[2], color="red", label="Start"
+        )
+
+        # Plot the gate positions
+        for i in range(self.num_gates):
+            ax.scatter(
+                self.gates_pos[i, 0],
+                self.gates_pos[i, 1],
+                self.gates_pos[i, 2],
+                color="blue",
+                label=f"Gate {i + 1}",
+            )
+
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.legend()
+        plt.show()
 
 
 class PathPlanner:

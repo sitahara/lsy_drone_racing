@@ -55,6 +55,8 @@ class MPCCppDynamics(DroneDynamics):
             initial_obs["rpy"],
             self.x[self.state_indices["progress"]],  # Pass the progress variable
         )
+        self.pathPlanner.testPath()
+        raise Exception("Test")
         self.p = self.pathPlanner.p
         self.param_indices = self.pathPlanner.param_indices
         self.current_param_index = self.pathPlanner.current_param_index
@@ -111,7 +113,7 @@ class MPCCppDynamics(DroneDynamics):
             d_vel = (
                 self.gv
                 + quaternion_rotation(quat, thrust_total)
-                - ca.mtimes(Rquat, self.DragMat, Rquat.T, vel)
+                - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
             )
         else:
             d_vel = self.gv + quaternion_rotation(quat, thrust_total)

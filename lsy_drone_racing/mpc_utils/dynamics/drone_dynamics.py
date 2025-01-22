@@ -239,6 +239,7 @@ class DroneDynamics(BaseDynamics):
                 action = x_sol[self.state_indices["u"], 1]
             else:
                 action = u_sol[:, 0]
+
             if self.controlType == "Torques":
                 action = action
             elif self.controlType == "MotorRPMs":
@@ -422,6 +423,7 @@ class DroneDynamics(BaseDynamics):
                 self.gamma * (f[0] - f[1] + f[2] - f[3]),
             )  # tau_x, tau_y, tau_z
             thrust_total = ca.vertcat(0, 0, ca.sum1(f) / self.mass)
+
         Rquat = quaternion_to_rotation_matrix(quat)
 
         dpos = vel
@@ -429,8 +431,7 @@ class DroneDynamics(BaseDynamics):
             dvel = (
                 self.gv
                 + quaternion_rotation(quat, thrust_total)
-                - Rquat @ self.DragMat @ Rquat.T @ vel
-                # - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
+                - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
             )
         else:
             dvel = self.gv + quaternion_rotation(quat, thrust_total)
