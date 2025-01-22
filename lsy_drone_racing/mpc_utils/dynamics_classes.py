@@ -4,6 +4,7 @@ This file implements multiple classes that define the dynamics, bounds, nonlinea
 The base class defines the general used methods and attributes, while the subclasses implement the specific dynamics and constraints.
 Shared utility functions are defined in the utils.py file.
 """
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
