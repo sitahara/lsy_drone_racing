@@ -225,8 +225,8 @@ class Planner:
             real_wp_x.append(gate_x[2])
             real_wp_y.append(gate_y[2])
 
-            real_wp_x.append(gate_x[2] + 0.3 * np.cos(gate_yaw[2] + np.pi / 2 + 0.4))
-            real_wp_y.append(gate_y[2] + 0.3 * np.sin(gate_yaw[2] + np.pi / 2 + 0.4))
+            real_wp_x.append(gate_x[2] + 0.3 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6))
+            real_wp_y.append(gate_y[2] + 0.3 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6))
 
             real_wp_x.append(gate_x[2] - 0.3)
             real_wp_y.append(gate_y[2] + 0.3)

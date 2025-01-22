@@ -36,9 +36,9 @@ class TrajectoryController(BaseController):
         self._freq = initial_info["env_freq"]
 
         self.DEBUG = True # Toggles the debug display
-        self.SAMPLE_IDX = 8 # Controls how much farther the desired position will be
+        self.SAMPLE_IDX = 11 # Controls how much farther the desired position will be
 
-        self.planner = Planner(DEBUG=self.DEBUG)
+        self.planner = Planner(MAX_ROAD_WIDTH=0.5, D_ROAD_W=0.1,DT=0.03,DEBUG=self.DEBUG)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
