@@ -206,7 +206,7 @@ class AcadosOptimizer(BaseOptimizer):
         self.ocp_solver.set(0, "ubx", current_state)
 
         # Set reference trajectory
-        if self.costs.cost_type != "external":
+        if self.dynamics.cost_type != "external":
             y_ref = np.vstack([x_ref[:, :-1], u_ref])
             y_ref_e = x_ref[:, -1]
             for i in range(self.n_horizon):

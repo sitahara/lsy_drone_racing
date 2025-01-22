@@ -1,37 +1,37 @@
 [dynamics_info]
-Interface = "Mellinger"
-ts = 0.16666666
+interface = "Mellinger" # "Mellinger", "Thrust"
+ts = 0.016666666
 n_horizon = 60
-ControlType = "Thrusts"
-BaseDynamics = "Quaternion"
-useControlRates = true
-usePredict = false
-t_predict = 0.05
-useDrags = false
+controlType = "Thrusts" # "Thrusts", 
+dynamicsType= "Quaternion" # "Quaternion", "Euler"
+useControlRates = false # always true for MPCC dynamics
+t_predict = 0.00 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
+useDrags = true # Whether to include drag forces in the dynamics
+
 
 [cost_info]
 cost_type = "linear"
-Qs_pos = 1 
-Qs_vel = 0.1
-Qs_ang = 0.1
-Qs_dang = 0.1
+Qs_pos = 1
+Qs_vel = 0.01
+Qs_ang = 0.01
+Qs_dang = 0.01
 Qs_quat = 0.01
-Rs = 0.01
-Rd = 0.01
+Rs = 0.1
+Rd = 0.01 # Control rates
 
 [cost_info_mpcc]
 cost_type = "mpcc"
-Ql = 1
-Qc = 1
-Qw = 1
-Qmu = 1
-Rdf = 0.01
-Rdprogress = 0.1
+Ql = 1 # lag weights
+Qc = 1 # contour weights
+Qw = 1 # ang vel weights
+Qmu = 1 # L1 dprogress weight
+Rdf = 0.01 # thrust rate weights
+Rdprogress = 0.01
 
 [constraints_info]
-ObstacleConstraints = true
+useObstacleConstraints = true
 obstacle_diameter = 0.1
-tunnel_constraints = true
+tunnel_constraints = true # only for MPCC dynamics
 Wn = 0.3
 Wgate = 0.1
 

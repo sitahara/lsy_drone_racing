@@ -54,7 +54,7 @@ class IPOPTOptimizer(BaseOptimizer):
         for i in range(self.n_horizon):
             for k in range(self.nu):
                 if k in self.dynamics.slackControls:
-                    opti.subject_to(opti.bounded(U_lb - s_u[:, i], U[:, i], U_ub + s_u[:, i]))
+                    opti.subject_to(opti.bounded(U_lb - s_u[k, i], U[:, i], U_ub + s_u[k, i]))
                 else:
                     opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
 
@@ -64,10 +64,16 @@ class IPOPTOptimizer(BaseOptimizer):
         terminal_cost_function = self.dynamics.terminalCostFunc
 
         for k in range(self.n_horizon):
-            cost += stage_cost_function(X[:, k], U[:, k], None, X_ref[:, k], U_ref[:, k])
+            cost += stage_cost_function(
+                X[:, k], U[:, k], self.dynamics.param_values, X_ref[:, k], U_ref[:, k]
+            )
 
         cost += terminal_cost_function(
-            X[:, -1], np.zeros((self.nu,)), None, X_ref[:, -1], np.zeros((self.nu,))
+            X[:, -1],
+            np.zeros((self.nu,)),
+            self.dynamics.param_values,
+            X_ref[:, -1],
+            np.zeros((self.nu,)),
         )  # Terminal cost
 
         # Add slack penalty to the cost function
@@ -136,6 +142,11 @@ class IPOPTOptimizer(BaseOptimizer):
         opti.set_value(X_ub, self.dynamics.x_ub)
         opti.set_value(U_lb, self.dynamics.u_lb)
         opti.set_value(U_ub, self.dynamics.u_ub)
+        # print("X_lb: ", self.dynamics.x_lb)
+        # print("X_ub: ", self.dynamics.x_ub)
+        # print("U_lb: ", self.dynamics.u_lb)
+        # print("U_ub: ", self.dynamics.u_ub)
+        # raise Exception("Stop here")
         # Set initial guess
         if self.x_guess is None or self.u_guess is None:
             opti.set_initial(X, np.hstack((current_state.reshape(self.nx, 1), x_ref[:, 1:])))

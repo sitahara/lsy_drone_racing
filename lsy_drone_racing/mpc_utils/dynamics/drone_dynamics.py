@@ -57,7 +57,6 @@ class DroneDynamics(BaseDynamics):
         dynamics_info: dict,
         constraints_info: dict,
         cost_info: dict,
-        onlyBaseInit: bool = False,
     ):
         """Initialization of the dynamics constraints.
 
@@ -113,17 +112,33 @@ class DroneDynamics(BaseDynamics):
         # Unpack the dynamics info
         self.n_horizon = dynamics_info.get("n_horizon", 60)
         self.ts = dynamics_info.get("ts", 1 / 60)
-        self.t_predict = dynamics_info.get("t_predict", 0.05)
-        self.usePredict = dynamics_info.get("usePredict", False)
-        self.interface = dynamics_info.get("Interface", "Mellinger")
+        self.t_predict = dynamics_info.get("t_predict", 0)
+        if self.t_predict == 0:
+            self.usePredict = False
+        else:
+            self.usePredict = True
+
+        self.interface = dynamics_info.get("interface", "Mellinger")
         if self.interface not in ["Mellinger", "Thrust"]:
             raise ValueError("Currently only Mellinger or Thrust interfaces are supported.")
-        self.baseDynamics = dynamics_info.get("BaseDynamics", "Euler")
-        if self.baseDynamics not in ["Euler", "Quaternion"]:
-            raise ValueError("Currently only Euler or Quaternion formulations are supported.")
-        self.controlType = dynamics_info.get("ControlType", "Thrusts")
+
+        self.baseDynamics = dynamics_info.get("dynamicsType", "Euler")
+        if self.baseDynamics not in ["Euler", "Quaternion", "MPCC"]:
+            raise ValueError(
+                "Currently only Euler, Quaternion, and MPCC formulations are supported."
+            )
+
+        if self.baseDynamics == "MPCC":
+            onlyBaseInit = True
+        else:
+            onlyBaseInit = False
+
+        self.controlType = dynamics_info.get("controlType", "Thrusts")
         if self.controlType not in ["Thrusts", "Torques", "MotorRPMs"]:
-            raise ValueError("Currently only Thrusts, Torques, or MotorRPMs are supported.")
+            raise ValueError(
+                "Currently only Thrusts, Torques, or MotorRPMs are supported. MPCC only uses Thrusts."
+            )
+
         self.useControlRates = dynamics_info.get("useControlRates", False)
         self.useAngVel = dynamics_info.get("useAngVel", True)
         if not self.useAngVel:
@@ -133,10 +148,10 @@ class DroneDynamics(BaseDynamics):
         self.useDrags = dynamics_info.get("useDrags", False)
 
         # Constraints
-        self.useObstacleConstraints = constraints_info.get("ObstacleConstraints", True)
+        self.useObstacleConstraints = constraints_info.get("useObstacleConstraints", True)
         # Initial values of the obstacles and gates
         self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
-        self.obstacle_diameter = self.initial_info.get("obstacle_diameter", 0.1)
+        self.obstacle_diameter = self.constraints_info.get("obstacle_diameter", 0.1)
         self.obstacles_visited = self.initial_obs.get("obstacles_visited", np.zeros((4,)))
         self.gates_pos = self.initial_obs.get("gates_pos", np.zeros((4, 3)))
         self.gates_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
@@ -175,10 +190,10 @@ class DroneDynamics(BaseDynamics):
     def setupCasadiFunctions(self):
         """Setup explicit, implicit, and discrete dynamics functions."""
         # Continuous dynamic function
-        if self.useControlRates:
-            self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "du"], ["dx"])
-        else:
-            self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "u"], ["dx"])
+        # if self.useControlRates:
+        #     self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "du"], ["dx"])
+        # else:
+        self.fc = ca.Function("fc", [self.x, self.u], [self.dx], ["x", "u"], ["dx"])
         self.fd = rungeKuttaFcn(self.nx, self.nu, self.ts, self.fc)
         if self.usePredict:
             self.fd_predict = rungeKuttaFcn(self.nx, self.nu, self.t_predict, self.fc)
@@ -203,14 +218,16 @@ class DroneDynamics(BaseDynamics):
         elif self.baseDynamics == "Quaternion":
             quat = Rot.from_euler("xyz", eul_ang).as_quat()
             x = np.concatenate([pos, vel, quat, w])
+
         if self.useControlRates:
             if self.last_u is None:
-                self.last_u = np.zeros((4,))
+                self.last_u = self.u_eq
             x = np.concatenate([x, self.last_u])
         # Predict the state into the future if self.usePredict is True
         if self.usePredict and self.last_u is not None:
             # fd_predict is a discrete dynamics function (RK4) with the time step t_predict
             x = self.fd_predict(x, self.last_u)
+        # print(x)
         return x
 
     def transformAction(self, x_sol: np.ndarray, u_sol: np.ndarray) -> np.ndarray:
@@ -248,7 +265,7 @@ class DroneDynamics(BaseDynamics):
                 quat = action[self.state_indices["quat"]]
                 yaw = Rot.from_quat(quat).as_euler("xyz")[2]
 
-            acc_world = (vel - x_sol[:, 0][self.state_indices["vel"]]) / self.ts
+            acc_world = (vel - x_sol[self.state_indices["vel"], 0]) / self.ts
             yaw = action[8]
             action = np.concatenate([pos, vel, acc_world, [yaw], w])
         return action.flatten()
@@ -317,7 +334,7 @@ class DroneDynamics(BaseDynamics):
             thrust_total = ca.vertcat(0, 0, (u[0] + u[1] + u[2] + u[3]) / self.mass)
             u_eq = 0.25 * self.mass * self.g * np.ones((4,))
         elif self.controlType == "Torques":
-            torques = ca.MX.sym("u", 3)
+            torques = ca.MX.sym("torques", 3)
             thrust_total = ca.MX.sym("thrust", 1)
             u_eq = np.array([self.mass * self.g, 0, 0, 0]).T
             u = ca.vertcat(thrust_total, torques)
@@ -391,7 +408,7 @@ class DroneDynamics(BaseDynamics):
             thrust_total = ca.vertcat(0, 0, (u[0] + u[1] + u[2] + u[3]) / self.mass)
             u_eq = 0.25 * self.mass * self.g * np.ones((4,))
         elif self.controlType == "Torques":
-            torques = ca.MX.sym("u", 3)
+            torques = ca.MX.sym("torques", 3)
             thrust_total = ca.MX.sym("thrust", 1)
             u_eq = np.array([self.mass * self.g, 0, 0, 0]).T
             u = ca.vertcat(thrust_total, torques)
@@ -412,7 +429,8 @@ class DroneDynamics(BaseDynamics):
             dvel = (
                 self.gv
                 + quaternion_rotation(quat, thrust_total)
-                - ca.mtimes(Rquat, self.DragMat, Rquat.T, vel)
+                - Rquat @ self.DragMat @ Rquat.T @ vel
+                # - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
             )
         else:
             dvel = self.gv + quaternion_rotation(quat, thrust_total)
@@ -495,9 +513,6 @@ class DroneDynamics(BaseDynamics):
         self.Qs = np.diag(Qs)
         self.Qt = np.diag(Qt)
         self.R = np.diag(R)
-        self.x_ref = np.tile(self.x_eq.reshape(self.nx, 1), self.n_horizon + 1)
-        # print(self.x_ref.shape)
-        self.u_ref = np.tile(self.u_eq.reshape(self.nu, 1), self.n_horizon)
         # print(self.u_ref.shape)
         self.stageCostFunc = self.LQ_stageCost
         self.terminalCostFunc = self.LQ_terminalCost
@@ -526,7 +541,7 @@ class DroneDynamics(BaseDynamics):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
                 self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
-                    :, -1
+                    :, :-1
                 ].flatten()
                 updated = True
         return updated
@@ -618,7 +633,7 @@ class DroneDynamics(BaseDynamics):
         self.tot_thrust_ub = 4 * self.thrust_ub[0]
         # Individual rotor thrust rate limits
         rate_max = (
-            (self.thrust_ub[0] - self.thrust_lb[0]) / 0.1
+            (self.thrust_ub[0] - self.thrust_lb[0]) / 0.5
         )  # Assuming the motor can go from 0 to max thrust in 0.1s, loose bounds, only for control rate
         self.thrust_rate_lb = -rate_max * np.ones((4,))
         self.thrust_rate_ub = rate_max * np.ones((4,))
@@ -660,7 +675,7 @@ class DroneDynamics(BaseDynamics):
             u_lb = np.array([self.tot_thrust_lb, -0.2, -0.2, -0.2])
             u_ub = np.array([self.tot_thrust_ub, 0.2, 0.2, 0.2])
             u_lb_rate = np.array([self.thrust_rate_lb * 4, -2, -2, -2])
-            u_lb_rate = np.array([self.thrust_rate_ub * 4, 2, 2, 2])
+            u_ub_rate = np.array([self.thrust_rate_ub * 4, 2, 2, 2])
         elif self.controlType == "MotorRPMs":
             u_lb = self.rpm_lb
             u_ub = self.rpm_ub

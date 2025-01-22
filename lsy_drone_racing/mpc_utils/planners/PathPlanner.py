@@ -27,16 +27,16 @@ class HermiteSplinePathPlanner:
         self.start_rpy = start_rpy
 
         # Define symbolic parameters for gate/start positions and orientations
-        self.start_pos_sym = ca.MX.sym("start_pos", 3)
-        self.start_rpy_sym = ca.MX.sym("start_rpy", 3)
+        self.start_pos_sym = ca.MX.sym("start_pos", 1, 3)
+        self.start_rpy_sym = ca.MX.sym("start_rpy", 1, 3)
         self.gates_pos_sym = ca.MX.sym("gates_pos", self.num_gates, 3)
         self.gates_rpy_sym = ca.MX.sym("gates_rpy", self.num_gates, 3)
         self.gate_progresses_sym = ca.MX.sym("gate_progresses", self.num_gates)
 
         # Combine all symbolic parameters into a single path parameter vector
         p_path = ca.vertcat(
-            self.start_pos_sym,
-            self.start_rpy_sym,
+            self.start_pos_sym.T,
+            self.start_rpy_sym.T,
             ca.reshape(self.gates_pos_sym, -1, 1),
             ca.reshape(self.gates_rpy_sym, -1, 1),
             self.gate_progresses_sym,
@@ -69,7 +69,7 @@ class HermiteSplinePathPlanner:
         self.current_param_index = current_param_index
 
         # Create Hermite spline with symbolic parameters
-        self.path_func, self.dpath_func, self.ddpath_func = self.create_hermite_spline()
+        self.path_func, self.dpath_func = self.create_hermite_spline()
 
         # Initialize gate progresses
         self.gate_progresses = self.calculate_gate_progresses(
@@ -88,9 +88,9 @@ class HermiteSplinePathPlanner:
             return h00, h10, h01, h11
 
         # Initialize path and derivatives
-        path = ca.MX.zeros(3)
-        dpath = ca.MX.zeros(3)
-        ddpath = ca.MX.zeros(3)
+        path = ca.MX.zeros(3, 1)
+        dpath = ca.MX.zeros(3, 1)
+        # ddpath = ca.MX.zeros(3, 1)
 
         # Normalize theta to [0, 1] for the entire path
         theta_norm = theta * (self.num_gates + 1)
@@ -109,17 +109,15 @@ class HermiteSplinePathPlanner:
             m1 = tangents[i + 1, :]
 
             # Normalize theta to [0, 1] for each segment
-            t = (theta_norm - i) / (i + 1 - i)
+            t = (theta_norm - i) / (self.num_gates + 1)
             h00, h10, h01, h11 = hermite_coeff(t)
 
             # Hermite spline equation
-            segment_path = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
-            segment_dpath = ca.gradient(segment_path, theta)
-            segment_ddpath = ca.gradient(segment_dpath, theta)
+            segment_path = (h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1).T
+            segment_dpath = ca.jacobian(segment_path, theta)
 
-            path += ca.if_else((theta_norm >= i) & (theta_norm < i + 1), segment_path, 0)
-            dpath += ca.if_else((theta_norm >= i) & (theta_norm < i + 1), segment_dpath, 0)
-            ddpath += ca.if_else((theta_norm >= i) & (theta_norm < i + 1), segment_ddpath, 0)
+            path += ca.if_else(ca.logic_and(theta_norm >= i, theta_norm < i + 1), segment_path, 0)
+            dpath += ca.if_else(ca.logic_and(theta_norm >= i, theta_norm < i + 1), segment_dpath, 0)
 
         path_func = ca.Function(
             "path",
@@ -131,13 +129,8 @@ class HermiteSplinePathPlanner:
             [theta, self.start_pos_sym, self.start_rpy_sym, self.gates_pos_sym, self.gates_rpy_sym],
             [dpath],
         )
-        ddpath_func = ca.Function(
-            "ddpath",
-            [theta, self.start_pos_sym, self.start_rpy_sym, self.gates_pos_sym, self.gates_rpy_sym],
-            [ddpath],
-        )
 
-        return path_func, dpath_func, ddpath_func
+        return path_func, dpath_func
 
     def compute_normals(self, orientations):
         """Compute the normal vectors from the orientations."""
@@ -166,15 +159,25 @@ class HermiteSplinePathPlanner:
 
     def calculate_gate_progresses(self, gates_pos, gates_rpy, start_pos, start_rpy):
         num_gates = gates_pos.shape[0]
-        gate_progresses = ca.MX.zeros(num_gates)
+        gate_progresses = np.zeros(num_gates)
         for i in range(num_gates):
             gate_pos = gates_pos[i]
             # Find the progress value that minimizes the distance to the gate position
             progress_values = np.linspace(0, 1, 1000)
-            distances = [
-                ca.norm_2(self.path_func(p, start_pos, start_rpy, gates_pos, gates_rpy) - gate_pos)
-                for p in progress_values
-            ]
+            print("path")
+            print(self.path_func(0.1, start_pos, start_rpy, gates_pos, gates_rpy))
+            print(gate_pos)
+            distances = np.array(
+                [
+                    ca.norm_2(
+                        self.path_func(p, start_pos, start_rpy, gates_pos, gates_rpy)
+                        .full()
+                        .flatten()
+                        - gate_pos
+                    )
+                    for p in progress_values
+                ]
+            )
             gate_progresses[i] = progress_values[np.argmin(distances)]
         return gate_progresses
 
@@ -185,23 +188,30 @@ class HermiteSplinePathPlanner:
             self.gates_pos, self.gates_rpy, self.start_pos, self.start_rpy
         )
 
-    def computeProgress(self, current_pos, current_vel, num_samples=100):
+    def computeProgress(self, current_pos, current_vel, num_samples=1000):
         """Compute the current progress and progress rate along the path."""
         # Discretize the path
         progress_samples = np.linspace(0, 1, num_samples)
-        path_positions = np.array(
-            [
-                self.path_func(p, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy)
-                for p in progress_samples
-            ]
+        path_positions = (
+            np.array(
+                [
+                    self.path_func(
+                        p, self.start_pos, self.start_rpy, self.gates_pos, self.gates_rpy
+                    )
+                    for p in progress_samples
+                ]
+            )
+            .reshape(-1, 3)
+            .T
         )
 
         # Compute the distances from the current position to each sampled point
-        distances = np.linalg.norm(path_positions - current_pos, axis=1)
+        distances = np.linalg.norm(path_positions - current_pos.reshape((3, 1)), axis=0)
 
         # Find the index of the closest point
         closest_index = np.argmin(distances)
         closest_progress = progress_samples[closest_index]
+        print(closest_progress)
 
         # Optionally, interpolate between the closest points for more accuracy
         if closest_index > 0 and closest_index < num_samples - 1:

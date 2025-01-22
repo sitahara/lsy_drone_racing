@@ -1,5 +1,7 @@
 """Module for Model Predictive Controller implementation."""
 
+import time
+
 import casadi as ca
 import numpy as np
 import pybullet as p
@@ -11,8 +13,8 @@ from scipy.spatial.transform import Rotation as Rmat
 from lsy_drone_racing.control import BaseController
 from lsy_drone_racing.mpc_utils import (
     AcadosOptimizer,
-    IPOPTOptimizer,
     DroneDynamics,
+    IPOPTOptimizer,
     MPCCppDynamics,
 )
 
@@ -34,32 +36,37 @@ class MPC(BaseController):
         dynamics_info = config["dynamics_info"]
         self.ts = dynamics_info["ts"]
         self.n_horizon = dynamics_info["n_horizon"]
-        cost_info = config["cost_info"]
+
         optimizer_info = config["optimizer_info"]
         solver_options = config["solver_options"]
         constraints_info = config["constraints_info"]
 
         # Init Dynamics including control bounds
-        if dynamics_info["BaseDynamics"] == "MPCCppDynamics":
+        if dynamics_info["dynamicsType"] == "MPCC":
             self.dynamics = MPCCppDynamics(
-                initial_info, initial_obs, dynamics_info, constraints_info, cost_info
+                initial_obs,
+                initial_info,
+                dynamics_info,
+                constraints_info,
+                cost_info=config["cost_info_mpcc"],
             )
         else:
             self.dynamics = DroneDynamics(
-                initial_info, initial_obs, dynamics_info, constraints_info, cost_info
+                initial_obs,
+                initial_info,
+                dynamics_info,
+                constraints_info,
+                cost_info=config["cost_info"],
             )
 
-        # # Init reference trajectory
-        # if not additonal_info["dynamics_info"]["dynamics"] == "ThrustTime":
-        #     self.x_ref = np.tile(
-        #         self.dynamics.x_eq.reshape(self.dynamics.nx, 1), (1, self.n_horizon + 1)
-        #     )
-        #     self.u_ref = np.tile(
-        #         self.dynamics.u_eq.reshape(self.dynamics.nu, 1), (1, self.n_horizon)
-        #     )
-        #     self.setupCostFunction(additonal_info["cost_info"])
-        # else:
-        #     self.setupCostTimeFunction(additonal_info["cost_info"])
+        # Init reference trajectory
+        # self.dynamics.x_eq = np.zeros((self.dynamics.nx,))
+        # self.dynamics.u_eq = np.zeros((self.dynamics.nu,))
+        self.x_ref = np.tile(
+            self.dynamics.x_eq.reshape(self.dynamics.nx, 1), (1, self.n_horizon + 1)
+        )
+        self.u_ref = np.tile(self.dynamics.u_eq.reshape(self.dynamics.nu, 1), (1, self.n_horizon))
+        # print("u_ref", self.u_ref[:, :5], "x_ref", self.x_ref[:, :5])
         # Init Optimizer (acados needs also ipopt for initial guess, ipopt can be used standalone)
         self.ipopt = IPOPTOptimizer(
             dynamics=self.dynamics, solver_options=solver_options, optimizer_info=optimizer_info
@@ -75,7 +82,7 @@ class MPC(BaseController):
             [initial_obs["pos"], initial_obs["vel"], initial_obs["rpy"], initial_obs["ang_vel"]]
         )
         self.updateTargetTrajectory()
-        self.ipopt.step(self.current_state, self.dynamics.x_ref, self.dynamics.u_ref)
+        self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
         self.opt.x_guess = self.ipopt.x_guess
         self.opt.u_guess = self.ipopt.u_guess
         self.n_step = 0
@@ -97,20 +104,21 @@ class MPC(BaseController):
         self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]])
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
         self.updateTargetTrajectory()
+        start_time = time.time()
         if self.opt is None:
-            action = self.ipopt.step(self.current_state, self.dynamics.x_ref, self.dynamics.u_ref)
+            action = self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
         else:
-            action = self.opt.step(
-                self.current_state, obs, self.dynamics.x_ref, self.dynamics.u_ref
-            )
-
+            action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Control signal update time: {elapsed_time:.5f} seconds")
         print(f"Current position: {self.current_state[:3]}")
-        print(f"Desired position: {self.dynamics.x_ref[:3, 1]}")
+        print(f"Desired position: {self.x_ref[:3, 1]}")
         print(f"Next position: {action[:3]}")
 
         return action.flatten()
 
-    def set_target_trajectory(self, t_total: float = 8) -> None:
+    def set_target_trajectory(self, t_total: float = 9) -> None:
         """Set the target trajectory for the MPC controller."""
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
@@ -165,7 +173,7 @@ class MPC(BaseController):
             n_repeat = np.sum(t_horizon > self.t_total)
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
-        self.dynamics.x_ref[:3, :] = pos_des
+        self.x_ref[:3, :] = pos_des
         self.n_step += 1
         return None
 

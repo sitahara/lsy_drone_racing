@@ -33,10 +33,12 @@ class MPCCppDynamics(DroneDynamics):
             dynamics_info=dynamics_info,
             constraints_info=constraints_info,
             cost_info=cost_info,
-            onlyBaseInit=True,
         )
         self.Wn = self.constraints_info.get("Wn", 0.3)
-        self.Wn = self.constraints_info.get("Wgate", 0.1)
+        self.Wgate = self.constraints_info.get("Wgate", 0.1)
+        self.baseDynamics = "MPCC"
+        self.controlType = "Thrusts"
+        self.useControlRates = True
 
         # Setup the Dynamics, returns expressions for the continuous dynamics
         self.setup_dynamics()
@@ -122,8 +124,11 @@ class MPCCppDynamics(DroneDynamics):
 
         dx = ca.vertcat(d_pos, d_vel, d_quat, d_w, d_f, d_progress, d_dprogress)
         self.x = x
+        self.nx = x.size()[0]
         self.dx = dx
         self.u = u
+        self.nu = u.size()[0]
+        self.ny = self.nx + self.nu
         # Equilibrium state and control
         f_eq = 0.25 * self.mass * self.g * np.ones((4,))
         self.x_eq = np.concatenate([np.zeros((13,)), f_eq, np.zeros((2,))])  # Equilibrium state
@@ -145,7 +150,7 @@ class MPCCppDynamics(DroneDynamics):
             self.last_u = np.zeros((5,))
 
         x = np.concatenate(
-            [pos, vel, quat, w, self.last_u[self.control_indices["df"]], progress, dprogress]
+            [pos, vel, quat, w, self.last_u[self.control_indices["df"]], [progress], dprogress]
         )
         # Predict the state into the future if self.usePredict is True
         if self.usePredict and self.last_u is not None:
@@ -198,7 +203,9 @@ class MPCCppDynamics(DroneDynamics):
         updated = False
         if init:
             self.param_values = np.zeros((self.p.size()[0],))
-            self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos.flatten()
+            self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                :, :-1
+            ].flatten()
             self.param_values[self.param_indices["gate_progresses"]] = (
                 self.pathPlanner.gate_progresses
             )
@@ -223,7 +230,9 @@ class MPCCppDynamics(DroneDynamics):
             if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
-                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos.flatten()
+                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                    :, :-1
+                ].flatten()
                 updated = True
             # Return the updated parameter values for the acados interface
         return updated
@@ -235,8 +244,8 @@ class MPCCppDynamics(DroneDynamics):
         pos = self.x[self.state_indices["pos"]]
         # Parameter (all symbolic variables)
         gate_progresses = self.p[self.param_indices["gate_progresses"]]
-        gates_pos = self.p[self.param_indices["gates_pos"]]
-        gates_rpy = self.p[self.param_indices["gates_rpy"]]
+        gates_pos = self.p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
+        gates_rpy = self.p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
         start_pos = self.p[self.param_indices["start_pos"]]
         start_rpy = self.p[self.param_indices["start_rpy"]]
         # Nominal tunnel width = tunnel height
@@ -247,7 +256,7 @@ class MPCCppDynamics(DroneDynamics):
         def getTunnelWidth(gate_progresses: ca.MX, progress: ca.MX) -> ca.MX:
             """Calculate the tunnel width at the current progress."""
             # Calculate the progress distance to the nearest gate
-            d = ca.fmin(ca.fabs(gate_progresses - progress))
+            d = ca.mmin(ca.fabs(gate_progresses - progress))
             k = 10  # Steepness of the transition
             x0 = 0.1  # Midpoint of the transition
             sigmoid = 1 / (1 + ca.exp(-k * (d - x0)))
@@ -286,9 +295,9 @@ class MPCCppDynamics(DroneDynamics):
             self.nl_constr_uh = np.concatenate([self.nl_constr_uh, np.ones((4,)) * 1e9])
 
         self.nl_constr_indices["tunnel"] = np.arange(
-            self.current_nl_constr_index, tunnel_constraints.size()[0]
+            self.current_nl_constr_index, len(tunnel_constraints) + self.current_nl_constr_index
         )
-        self.current_nl_constr_index += tunnel_constraints.size()[0]
+        self.current_nl_constr_index += len(tunnel_constraints)
 
     def setupBoundsAndScals(self):
         x_lb = np.concatenate(
@@ -307,12 +316,12 @@ class MPCCppDynamics(DroneDynamics):
                 self.state_indices["dprogress"],
             ]
         )
-        self.nsx = self.slackStates.size()[0]
+        self.nsx = len(self.slackStates)
 
         self.slackControls = np.concatenate(
             [self.control_indices["df"], self.control_indices["ddprogress"]]
         )
-        self.nsu = self.slackControls.size()[0]
+        self.nsu = len(self.slackControls)
 
         self.x_lb = x_lb
         self.x_ub = x_ub
@@ -368,10 +377,10 @@ class MPCCppDynamics(DroneDynamics):
         progress = x[self.state_indices["progress"]]
         dprogress = x[self.state_indices["dprogress"]]
         df = u[self.control_indices["df"]]
-        gates_pos = p[self.param_indices["gates_pos"]]
-        gates_rpy = p[self.param_indices["gates_rpy"]]
-        start_pos = p[self.param_indices["start_pos"]]
-        start_rpy = p[self.param_indices["start_rpy"]]
+        gates_pos = p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
+        gates_rpy = p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
+        start_pos = p[self.param_indices["start_pos"]].reshape((1, 3))
+        start_rpy = p[self.param_indices["start_rpy"]].reshape((1, 3))
 
         # Desired position and tangent vector on the path
         path = self.pathPlanner.path_func  # Unpack the path function
@@ -403,7 +412,7 @@ class MPCCppDynamics(DroneDynamics):
         dprogress_cost = -dprogress * self.Qmu
 
         # Thrust rate cost
-        thrust_rate_cost = ca.mtimes([df.T, self.Rdf, df])
+        thrust_rate_cost = df.T @ self.Rdf @ df  # ca.mtimes([df.T, self.Rdf, df])
 
         # Total stage cost
         stage_cost = (
