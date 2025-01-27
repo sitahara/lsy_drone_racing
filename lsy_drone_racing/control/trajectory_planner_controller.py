@@ -36,9 +36,9 @@ class TrajectoryController(BaseController):
         self._freq = initial_info["env_freq"]
 
         self.DEBUG = True # Toggles the debug display
-        self.SAMPLE_IDX = 8 # Controls how much farther the desired position will be
+        self.SAMPLE_IDX = 10 # Controls how much farther the desired position will be
 
-        self.planner = Planner(DEBUG=self.DEBUG)
+        self.planner = Planner(DEBUG=self.DEBUG, USE_QUINTIC_SPLINE=False, SAFETY_MARGIN=0.1)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
@@ -63,8 +63,9 @@ class TrajectoryController(BaseController):
         obs_x, obs_y = obs["obstacles_pos"][:, 0], obs["obstacles_pos"][:, 1]
         next_gate = obs["target_gate"] + 1
         drone_x, drone_y = obs["pos"][0], obs["pos"][1]
+        drone_vx, drone_vy = obs["vel"][0], obs["vel"][1]
         result_path, ref_path, _ = self.planner.plan_path_from_observation(
-            gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+            gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, drone_vx, drone_vy, next_gate
         )
 
         # debug display on pybullet GUI
