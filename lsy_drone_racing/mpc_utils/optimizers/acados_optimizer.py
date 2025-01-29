@@ -173,7 +173,8 @@ class AcadosOptimizer(BaseOptimizer):
         ocp.model.con_h_expr = self.dynamics.nl_constr
         ocp.constraints.lh = self.dynamics.nl_constr_lh
         ocp.constraints.uh = self.dynamics.nl_constr_uh
-        ocp.parameter_values = self.dynamics.param_values
+        if self.dynamics.param_values is not None:
+            ocp.parameter_values = self.dynamics.param_values
 
         if self.useZoro:
             raise NotImplementedError("Zoro not implemented yet.")

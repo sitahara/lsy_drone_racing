@@ -5,7 +5,7 @@ import numpy as np
 import toml
 from scipy.spatial.transform import Rotation as Rot
 
-from lsy_drone_racing.mpc_utils.planners import HermiteSplinePathPlanner, PathPlanner
+from lsy_drone_racing.mpc_utils.planners import HermiteSplinePathPlanner, PathPlanner, HermiteSpline
 from lsy_drone_racing.mpc_utils.utils import (
     W1,
     Rbi,
@@ -45,21 +45,29 @@ class MPCCppDynamics(DroneDynamics):
         # Defines the bounds and scaling factors for the states and controls, and which states/controls have slack variables
         self.setupBoundsAndScals()
         # Init the path Planner
-        self.pathPlanner = HermiteSplinePathPlanner(
-            self.p,  # Complete parameter vector
-            self.param_indices,  # Indices of the parameters
-            self.current_param_index,  # Current index of the parameters
-            initial_obs["gates_pos"],
-            initial_obs["gates_rpy"],
+        self.pathPlanner = HermiteSpline(
+            self.x[self.state_indices["progress"]],
             initial_obs["pos"],
             initial_obs["rpy"],
-            self.x[self.state_indices["progress"]],  # Pass the progress variable
+            initial_obs["gates_pos"],
+            initial_obs["gates_rpy"],
         )
-        self.pathPlanner.testPath()
-        raise Exception("Test")
-        self.p = self.pathPlanner.p
-        self.param_indices = self.pathPlanner.param_indices
-        self.current_param_index = self.pathPlanner.current_param_index
+
+        # HermiteSplinePathPlanner(
+        #     self.p,  # Complete parameter vector
+        #     self.param_indices,  # Indices of the parameters
+        #     self.current_param_index,  # Current index of the parameters
+        #     initial_obs["gates_pos"],
+        #     initial_obs["gates_rpy"],
+        #     initial_obs["pos"],
+        #     initial_obs["rpy"],
+        #     self.x[self.state_indices["progress"]],  # Pass the progress variable
+        # )
+        # self.pathPlanner.testPath()
+        # raise Exception("Test")
+        # self.p = self.pathPlanner.p
+        # self.param_indices = self.pathPlanner.param_indices
+        # self.current_param_index = self.pathPlanner.current_param_index
         # Setup nonlinear constraints
         self.setupNLConstraints()
         # Setup the cost function
@@ -208,13 +216,13 @@ class MPCCppDynamics(DroneDynamics):
             self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
                 :, :-1
             ].flatten()
-            self.param_values[self.param_indices["gate_progresses"]] = (
-                self.pathPlanner.gate_progresses
-            )
-            self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
-            self.param_values[self.param_indices["gates_rpy"]] = self.gates_rpy.flatten()
-            self.param_values[self.param_indices["start_pos"]] = self.initial_obs["pos"]
-            self.param_values[self.param_indices["start_rpy"]] = self.initial_obs["rpy"]
+            # self.param_values[self.param_indices["gate_progresses"]] = (
+            #     self.pathPlanner.gate_progresses
+            # )
+            # self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
+            # self.param_values[self.param_indices["gates_rpy"]] = self.gates_rpy.flatten()
+            # self.param_values[self.param_indices["start_pos"]] = self.initial_obs["pos"]
+            # self.param_values[self.param_indices["start_rpy"]] = self.initial_obs["rpy"]
 
         else:
             if np.any(np.not_equal(self.gates_visited, obs["gates_visited"])):
@@ -245,11 +253,13 @@ class MPCCppDynamics(DroneDynamics):
         progress = self.x[self.state_indices["progress"]]
         pos = self.x[self.state_indices["pos"]]
         # Parameter (all symbolic variables)
-        gate_progresses = self.p[self.param_indices["gate_progresses"]]
-        gates_pos = self.p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
-        gates_rpy = self.p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
-        start_pos = self.p[self.param_indices["start_pos"]]
-        start_rpy = self.p[self.param_indices["start_rpy"]]
+        gate_progresses = ca.MX.sym(
+            "gate_progresses", self.pathPlanner.num_gates
+        )  # self.p[self.param_indices["gate_progresses"]]
+        # gates_pos = self.p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
+        # gates_rpy = self.p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
+        # start_pos = self.p[self.param_indices["start_pos"]]
+        # start_rpy = self.p[self.param_indices["start_rpy"]]
         # Nominal tunnel width = tunnel height
         Wn = self.Wn
         # Tunnel width = tunnel height at the gate
@@ -268,8 +278,12 @@ class MPCCppDynamics(DroneDynamics):
         H = W  # Assuming W(θk) = H(θk)
 
         # Symbolic functions for the path and its derivative
-        path = self.pathPlanner.path_func(progress, start_pos, start_rpy, gates_pos, gates_rpy)
-        dpath = self.pathPlanner.dpath_func(progress, start_pos, start_rpy, gates_pos, gates_rpy)
+        path = self.pathPlanner.path_function(
+            progress
+        )  # , start_pos, start_rpy, gates_pos, gates_rpy)
+        dpath = self.pathPlanner.dpath_function(
+            progress
+        )  # , start_pos, start_rpy, gates_pos, gates_rpy)
 
         t = dpath / ca.norm_2(dpath)  # Normalized Tangent vector at the current progress
         # Compute the normal vector n (assuming the normal is in the xy-plane)
@@ -370,8 +384,8 @@ class MPCCppDynamics(DroneDynamics):
         # Progress rate weights
         self.Rdprogress = self.cost_info.get("Rdprogress", 1)
         # Define the cost function
-        self.stageCostFunc = self.MPCC_stage_cost
-        self.terminalCostFunc = self.MPCC_stage_cost  # use zero for u
+        self.stageCostFunc = self.MPCC_stage_cost(self.x, self.u, self.p)
+        self.terminalCostFunc = self.MPCC_stage_cost(self.x, self.u, self.p)  # use zero for u
 
     def MPCC_stage_cost(self, x, u, p, x_ref=None, u_ref=None):
         pos = x[self.state_indices["pos"]]
@@ -379,20 +393,12 @@ class MPCCppDynamics(DroneDynamics):
         progress = x[self.state_indices["progress"]]
         dprogress = x[self.state_indices["dprogress"]]
         df = u[self.control_indices["df"]]
-        gates_pos = p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
-        gates_rpy = p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
-        start_pos = p[self.param_indices["start_pos"]].reshape((1, 3))
-        start_rpy = p[self.param_indices["start_rpy"]].reshape((1, 3))
 
         # Desired position and tangent vector on the path
-        path = self.pathPlanner.path_func  # Unpack the path function
-        dpath = self.pathPlanner.dpath_func  # Unpack the path gradient function
-        pd = path(
-            progress, start_pos, start_rpy, gates_pos, gates_rpy
-        )  # Desired position on the path
-        tangent_line = dpath(
-            progress, start_pos, start_rpy, gates_pos, gates_rpy
-        )  # Tangent vector of the path at the current progress
+        path = self.pathPlanner.path_function  # Unpack the path function
+        dpath = self.pathPlanner.dpath_function  # Unpack the path gradient function
+        pd = path(progress)  # Desired position on the path
+        tangent_line = dpath(progress)  # Tangent vector of the path at the current progress
         tangent_line = tangent_line / ca.norm_2(tangent_line)  # Normalize the tangent vector
         pos_err = pos - pd  # Error between the current position and the desired position
 
@@ -402,6 +408,7 @@ class MPCCppDynamics(DroneDynamics):
 
         # Contour error
         contour_err = pos_err - lag_err
+        # contour_err = pos_err - ca.mtimes([lag_err, tangent_line])
         contour_cost = ca.mtimes([contour_err.T, self.Qc, contour_err])
 
         # Body angular velocity cost
@@ -420,5 +427,7 @@ class MPCCppDynamics(DroneDynamics):
         stage_cost = (
             lag_cost + contour_cost + w_cost + dprogress_cost + dprogress_cost_L2 + thrust_rate_cost
         )
-
+        stage_cost = ca.Function(
+            "stage_cost", [x, u, p], [stage_cost], ["x", "u", "p"], ["stage_cost"]
+        )
         return stage_cost

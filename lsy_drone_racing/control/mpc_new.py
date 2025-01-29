@@ -77,15 +77,7 @@ class MPC(BaseController):
 
         self.set_target_trajectory()
 
-        self.obs = initial_obs
-        self.current_state = np.concatenate(
-            [initial_obs["pos"], initial_obs["vel"], initial_obs["rpy"], initial_obs["ang_vel"]]
-        )
-        self.updateTargetTrajectory()
-        self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
-        self.opt.x_guess = self.ipopt.x_guess
-        self.opt.u_guess = self.ipopt.u_guess
-        self.n_step = 0
+        self.calculate_initial_guess()
 
     def compute_control(
         self, obs: NDArray[np.floating], info: dict | None = None
@@ -116,10 +108,22 @@ class MPC(BaseController):
         print(f"Desired position: {self.x_ref[:3, 1]}")
         if self.dynamics.interface == "Mellinger":
             print(f"Next position: {action[:3]}")
+            # action[3:] = np.zeros(10)
         else:
             print(f"Total Thrust:", action[0], "Torques:", action[1:])
 
         return action.flatten()
+
+    def calculate_initial_guess(self):
+        self.obs = self.initial_obs
+        self.current_state = np.concatenate(
+            [self.obs["pos"], self.obs["vel"], self.obs["rpy"], self.obs["ang_vel"]]
+        )
+        self.updateTargetTrajectory()
+        self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
+        self.opt.x_guess = self.ipopt.x_guess
+        self.opt.u_guess = self.ipopt.u_guess
+        self.n_step = 0
 
     def set_target_trajectory(self, t_total: float = 9) -> None:
         """Set the target trajectory for the MPC controller."""
@@ -127,7 +131,7 @@ class MPC(BaseController):
         self.t_total = t_total
         waypoints = np.array(
             [
-                [1.0, 1.0, 0.05],
+                [1.0, 1.0, 0.0],
                 [0.8, 0.5, 0.2],
                 [0.55, -0.8, 0.4],
                 [0.2, -1.8, 0.65],
@@ -176,7 +180,9 @@ class MPC(BaseController):
             n_repeat = np.sum(t_horizon > self.t_total)
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
-        self.x_ref[:3, :] = pos_des
+        self.x_ref[:3, :] = (
+            pos_des  # np.tile(np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1))  # pos_des
+        )
         self.n_step += 1
         return None
 

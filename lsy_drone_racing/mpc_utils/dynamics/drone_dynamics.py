@@ -253,7 +253,7 @@ class DroneDynamics(BaseDynamics):
                         self.gamma * (action[0] - action[1] + action[2] - action[3]),
                     ]
                 )
-                tot_thrust = np.sum(action)
+                tot_thrust = action[0] + action[1] + action[2] + action[3]
                 action = np.concatenate([[tot_thrust], torques])
         elif self.interface == "Mellinger":
             action = x_sol[:, 1]
@@ -410,9 +410,10 @@ class DroneDynamics(BaseDynamics):
             u_eq = 0.25 * self.mass * self.g * np.ones((4,))
         elif self.controlType == "Torques":
             torques = ca.MX.sym("torques", 3)
-            thrust_total = ca.MX.sym("thrust", 1)
+            thrust_tot = ca.MX.sym("tot_thrust", 1)
+            thrust_total = ca.vertcat(0, 0, thrust_tot / self.mass)
             u_eq = np.array([self.mass * self.g, 0, 0, 0]).T
-            u = ca.vertcat(thrust_total, torques)
+            u = ca.vertcat(thrust_tot, torques)
         elif self.controlType == "MotorRPMs":
             u = ca.MX.sym("rpm", 4)
             u_eq = np.sqrt((self.mass * self.g / 4) / self.ct) * np.ones((4,))
@@ -532,12 +533,12 @@ class DroneDynamics(BaseDynamics):
         """Update the parameters of the drone/environment controller."""
         # Checks whether gate observation has been updated, replans if needed, and updates the path, dpath, and gate progresses parameters
         updated = False
-        if init:
+        if init and self.p is not None:
             self.param_values = np.zeros((self.p.size()[0],))
             self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
                 :, :-1
             ].flatten()
-        else:
+        elif self.p is not None:
             if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
@@ -630,8 +631,8 @@ class DroneDynamics(BaseDynamics):
         # Individual rotor thrust limits
         self.thrust_lb = self.ct * (rpm_lb**2) * np.ones((4,))
         self.thrust_ub = self.ct * (rpm_ub**2) * np.ones((4,))
-        self.tot_thrust_lb = 4 * self.thrust_lb[0]
-        self.tot_thrust_ub = 4 * self.thrust_ub[0]
+        self.tot_thrust_lb = -1  # 4 * self.thrust_lb[0]
+        self.tot_thrust_ub = +1  # 4 * self.thrust_ub[0]
         # Individual rotor thrust rate limits
         rate_max = (
             (self.thrust_ub[0] - self.thrust_lb[0]) / 0.5
@@ -654,16 +655,9 @@ class DroneDynamics(BaseDynamics):
         self.eul_rate_ub = np.array([large_val, large_val, large_val]).T
         self.w_lb = np.array([-large_val, -large_val, -large_val]).T
         self.w_ub = np.array([large_val, large_val, large_val]).T
-        # What are the bounds for the quaternions?
-        # TODO: Review quaternion bounds or maybe implement them as non-linear constraints
-        # Convert Euler angle bounds to quaternions
-        # Note: Implementing quaternion bounds as non-linear constraints
-        quat_max = Rot.from_euler("xyz", self.eul_ang_ub).as_quat()
-        quat_min = Rot.from_euler("xyz", self.eul_ang_lb).as_quat()
-        self.quat_lb = np.array([quat_min[0], quat_min[1], quat_min[2], quat_min[3]])
-        self.quat_ub = np.array([quat_max[0], quat_max[1], quat_max[2], quat_max[3]])
-        self.quat_lb = -1e3 * np.ones((4,))  # remove bounds (enforced by constraints)
-        self.quat_ub = 1e3 * np.ones((4,))  # remove bounds (enforced by constraints)
+        # What are the bounds for the quaternions? Implemented as non-linear constraints
+        self.quat_lb = -1e3 * np.ones((4,))
+        self.quat_ub = 1e3 * np.ones((4,))
 
     def setupBoundsAndScals(self):
         """Setup the constraints and scaling factors for the controller."""
@@ -673,10 +667,10 @@ class DroneDynamics(BaseDynamics):
             u_lb_rate = self.thrust_rate_lb
             u_ub_rate = self.thrust_rate_ub
         elif self.controlType == "Torques":
-            u_lb = np.array([self.tot_thrust_lb, -0.2, -0.2, -0.2])
-            u_ub = np.array([self.tot_thrust_ub, 0.2, 0.2, 0.2])
-            u_lb_rate = np.array([self.thrust_rate_lb * 4, -2, -2, -2])
-            u_ub_rate = np.array([self.thrust_rate_ub * 4, 2, 2, 2])
+            u_lb = np.array([self.tot_thrust_lb, -1, -1, -1])
+            u_ub = np.array([self.tot_thrust_ub, 1, 1, 1])
+            u_lb_rate = np.array([np.sum(self.thrust_rate_lb), -20, -20, -20])
+            u_ub_rate = np.array([np.sum(self.thrust_rate_ub) * 4, 20, 20, 20])
         elif self.controlType == "MotorRPMs":
             u_lb = self.rpm_lb
             u_ub = self.rpm_ub
