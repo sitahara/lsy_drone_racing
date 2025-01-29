@@ -1,0 +1,57 @@
+[dynamics_info]
+interface = "Mellinger" # "Mellinger", "Thrust"
+ts = 0.016666666
+n_horizon = 60
+controlType = "Thrusts" # "Thrusts", 
+dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
+useControlRates = false # always true for MPCC dynamics
+t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
+useDrags = true # Whether to include drag forces in the dynamics
+
+
+[cost_info]
+cost_type = "linear"
+Qs_pos = 1
+Qs_vel = 0.01
+Qs_ang = 0.01
+Qs_dang = 0.01
+Qs_quat = 0.01
+Rs = 0.1
+Rd = 0.01 # Control rates
+
+[cost_info_mpcc]
+cost_type = "mpcc"
+Ql = 1 # lag weights
+Qc = 1 # contour weights
+Qw = 1 # ang vel weights
+Qmu = 1 # L1 dprogress weight
+Rdf = 0.01 # thrust rate weights
+Rdprogress = 0.01
+
+[constraints_info]
+useObstacleConstraints = true
+obstacle_diameter = 0.1
+tunnel_constraints = true # only for MPCC dynamics
+Wn = 0.3
+Wgate = 0.1
+
+[optimizer_info]
+useSoftConstraints = true
+softPenalty = 1e3
+useGP = false
+useZoro = false
+export_dir ="generated_code/mpc"
+json_file = "acados_ocp.json"
+
+[solver_options]
+ipopt.print_level= 0
+ipopt.tol= 1e-4
+ipopt.max_iter= 25
+ipopt.linear_solver= "mumps"
+acados_nlp_solver= "SQP_RTI"
+acados_integrator= "ERK"
+acados_cost_discretization= "EULER"
+acados_qp_solver= "PARTIAL_CONDENSING_HPIPM"
+acados_globalization= "MERIT_BACKTRACKING"
+acados_tol= 1e-3
+acados_qp_tol= 1e-3
