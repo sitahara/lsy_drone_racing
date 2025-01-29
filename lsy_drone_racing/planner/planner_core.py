@@ -16,12 +16,14 @@ class PlannerCore:
     def __init__(
         self,
         MAX_CURVATURE: float = 50.0,
-        MAX_ROAD_WIDTH: float = 0.5,
+        MAX_ROAD_WIDTH: float = 0.3,
         D_ROAD_W: float = 0.05,
         DT: float = 0.05,
         T_PRED: float = 1.0,
         K_J: float = 0.5,
         K_D: float = 5.0,
+        SAFETY_MARGIN: float = 0.05,
+        USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
     ):
         """Initialize planning parameters.
@@ -42,6 +44,11 @@ class PlannerCore:
                 Weight constant for the trajectory's rate of change of acceleration (jerk).
             K_D:
                 Weight constant for the terminal deviation from the desired trajectory.
+            SAFETY_MARGIN:
+                Planned trajectory tries to take this much margin from obstacles.
+            USE_QUINTIC_SPLINE:
+                If True, uses quintic spline curve as the candidate trajectory in frenet frame.
+                Otherwise uses lines
             DEBUG:
                 Enables or disables output of some parameters to the console.
         """
@@ -55,6 +62,12 @@ class PlannerCore:
         # Cost weights
         self.K_J = K_J
         self.K_D = K_D
+
+        # Safety margin for obstacle avoidance
+        self.SAFETY_MARGIN = SAFETY_MARGIN
+
+        # Planner configuration
+        self.USE_QUINTIC_SPLINE = USE_QUINTIC_SPLINE
 
         # debug
         self.DEBUG = DEBUG
@@ -97,8 +110,11 @@ class PlannerCore:
             # Lateral motion planning
             fp = FrenetPath()
 
-            # lat_qp = QuinticSpline_2D(self.T_PRED, d0, 0.0, 0.0, di)
-            lat_qp = Line_2D(self.T_PRED, d0, di)
+            lat_qp = None
+            if self.USE_QUINTIC_SPLINE is True:
+                lat_qp = QuinticSpline_2D(self.T_PRED, d0, 0.0, 0.0, di)
+            else:
+                lat_qp = Line_2D(self.T_PRED, d0, di)
 
             fp.t = np.array([t for t in np.arange(0.0, self.T_PRED, self.DT)])
             fp.d = np.array([lat_qp.calc_point(t) for t in fp.t])
@@ -108,9 +124,11 @@ class PlannerCore:
 
             fp.s = fp.t + s0
 
+            # Setting up cost of candidates
+
             Jp = sum(np.power(fp.d_ddd, 2))  # Square of jerk
 
-            fp.cost = self.K_J * Jp + self.K_D * fp.d[-1] ** 2
+            fp.cost = self.K_J * Jp + self.K_D * fp.d[-1] ** 2  # Cost: Jerk and Terminal deviation
 
             frenet_paths.append(fp)
 
@@ -179,18 +197,26 @@ class PlannerCore:
             `True` if the sampled points of the path are free from collisions,
             `False` if there is any collision.
         """
-        col_num = 0
-        for i in range(len(ob)):
-            d = np.array(
-                [
-                    ((ix - ob[i][0]) ** 2 + (iy - ob[i][1]) ** 2) - ob[i][2] ** 2
-                    for (ix, iy) in zip(fp.x, fp.y)
-                ]
-            )
+        # Convert path points to numpy arrays
+        fp_x = np.array(fp.x)
+        fp_y = np.array(fp.y)
 
-            collision = np.sum(d <= 0)
-            col_num += collision
-        return col_num
+        # Convert obstacle list to numpy array for vectorized operations
+        ob_array = np.array(ob)
+
+        # Calculate the squared distances from path points to obstacle centers
+        dx = fp_x[:, np.newaxis] - ob_array[:, 0]
+        dy = fp_y[:, np.newaxis] - ob_array[:, 1]
+        distances_squared = dx**2 + dy**2
+
+        # Calculate the squared collision distances
+        collision_distances_squared = (ob_array[:, 2] / 2 + self.SAFETY_MARGIN) ** 2
+
+        # Check for collisions
+        collisions = np.sum(distances_squared <= collision_distances_squared, axis=0)
+
+        # Return the number of collisions
+        return np.sum(collisions)
 
     def check_paths(
         self, fplist: List[FrenetPath], ob: List[Tuple[float, float, float]]

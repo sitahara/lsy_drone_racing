@@ -18,12 +18,14 @@ class Planner:
     def __init__(
         self,
         MAX_CURVATURE: float = 50.0,
-        MAX_ROAD_WIDTH: float = 1.0,
+        MAX_ROAD_WIDTH: float = 0.5,
         D_ROAD_W: float = 0.1,
-        DT: float = 0.05,
-        T_PRED: float = 1.0,
+        DT: float = 0.03,
+        NUM_POINTS: int = 20,
         K_J: float = 0.5,
-        K_D: float = 8.0,
+        K_D: float = 15.0,
+        SAFETY_MARGIN: float = 0.05,
+        USE_QUINTIC_SPLINE: bool = False,
         DEBUG: bool = False,
     ):
         """Initializes the planner core.
@@ -39,15 +41,23 @@ class Planner:
             Determines the width to sample the lateral offset of the trajectory in frenet frame.
         DT : float
             Sampling interval of the planned trajectory.
-        T_PRED : float
-            Length of the planned trajectory.
+        NUM_POINTS : int
+            Number of points included in the planned trajectory.
         K_J : float
             Weight constant for the trajectory's jerk.
         K_D : float
             Weight constant for the terminal deviation from the desired trajectory.
+        SAFETY_MARGIN:
+                Planned trajectory tries to take this much margin from obstacles.
+        USE_QUINTIC_SPLINE:
+            If True, uses quintic spline curve as the candidate trajectory in frenet frame.
+            Otherwise uses lines
         DEBUG : bool
             Enables or disables display of planning information on a separate matplotlib window.
         """
+        # calculate prediction horizon based on the number of points
+        T_PRED = (NUM_POINTS) * DT
+
         self.planner_core = PlannerCore(
             MAX_CURVATURE=MAX_CURVATURE,
             MAX_ROAD_WIDTH=MAX_ROAD_WIDTH,
@@ -56,7 +66,9 @@ class Planner:
             T_PRED=T_PRED,
             K_J=K_J,
             K_D=K_D,
-            DEBUG=DEBUG
+            SAFETY_MARGIN=SAFETY_MARGIN,
+            USE_QUINTIC_SPLINE=USE_QUINTIC_SPLINE,
+            DEBUG=DEBUG,
         )
         self.DEBUG = DEBUG
         print(f"Debugging is {'Enabled' if self.DEBUG else 'Disabled'}")
@@ -79,7 +91,7 @@ class Planner:
         gate_x: List[float],
         gate_y: List[float],
         gate_yaw: List[float],
-        expand_rate: float = 2.0,
+        expand_rate: float = 1.1,
     ) -> List[Tuple[float, float, float]]:
         """Creates a 2D map of obstacles.
 
@@ -182,8 +194,8 @@ class Planner:
         if next_gate == 1:
             real_wp_x = [1, 0.975, gate_x[0]]
             real_wp_y = [1, 0.9, gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2))
-            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2))
+            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
+            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
             real_wp_x.append(gate_x[1])
             real_wp_y.append(gate_y[1])
             real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
@@ -192,8 +204,8 @@ class Planner:
         elif next_gate == 2:
             real_wp_x = [gate_x[0]]
             real_wp_y = [gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2))
-            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2))
+            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
+            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
             real_wp_x.append(gate_x[1])
             real_wp_y.append(gate_y[1])
             real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
@@ -203,7 +215,7 @@ class Planner:
             real_wp_x.append(gate_x[2] + 0.05 * np.cos(gate_yaw[2] + np.pi / 2))
             real_wp_y.append(gate_y[2] + 0.05 * np.sin(gate_yaw[2] + np.pi / 2))
             real_wp_z = [gate_z[0], gate_z[0], gate_z[1], gate_z[1], gate_z[2], gate_z[2]]
-        elif next_gate == 3:
+        elif next_gate == 3 or next_gate == 4:
             real_wp_x = [gate_x[1]]
             real_wp_y = [gate_y[1]]
 
@@ -213,17 +225,17 @@ class Planner:
             real_wp_x.append(gate_x[2])
             real_wp_y.append(gate_y[2])
 
-            real_wp_x.append(gate_x[2] + 0.5 * np.cos(gate_yaw[2] + np.pi / 2))
-            real_wp_y.append(gate_y[2] + 0.5 * np.sin(gate_yaw[2] + np.pi / 2))
+            real_wp_x.append(gate_x[2] + 0.3 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6))
+            real_wp_y.append(gate_y[2] + 0.3 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6))
 
-            real_wp_x.append(gate_x[2] - 0.5)
-            real_wp_y.append(gate_y[2] + 0.5)
+            real_wp_x.append(gate_x[2] - 0.3)
+            real_wp_y.append(gate_y[2] + 0.3)
 
             real_wp_x.append(gate_x[3])
             real_wp_y.append(gate_y[3])
 
-            real_wp_x.append(gate_x[3] + 0.05 * np.cos(gate_yaw[3] + np.pi / 2))
-            real_wp_y.append(gate_y[3] + 0.05 * np.sin(gate_yaw[3] + np.pi / 2))
+            real_wp_x.append(gate_x[3] + 0.5 * np.cos(gate_yaw[3] + np.pi / 2))
+            real_wp_y.append(gate_y[3] + 0.5 * np.sin(gate_yaw[3] + np.pi / 2))
             real_wp_z = [
                 gate_z[1],
                 gate_z[1],
@@ -231,34 +243,6 @@ class Planner:
                 gate_z[2],
                 (gate_z[2] + gate_z[3]) / 2,
                 gate_z[3],
-                gate_z[3],
-            ]
-        elif next_gate == 4:
-            real_wp_x = [gate_x[2]]
-            real_wp_y = [gate_y[2]]
-            # real_wp_x = [gate_x[2] + 0.5 * np.cos(gate_yaw[2] + np.pi / 2)]
-            # real_wp_y = [gate_y[2] + 0.5 * np.sin(gate_yaw[2] + np.pi / 2)]
-
-            # real_wp_x.append(gate_x[2] + 0.2 * np.cos(gate_yaw[2] + np.pi / 2))
-            # real_wp_y.append(gate_y[2] + 0.2 * np.sin(gate_yaw[2] + np.pi / 2))
-
-            real_wp_x.append(gate_x[2] - 0.5)
-            real_wp_y.append(gate_y[2] + 0.5)
-
-            real_wp_x.append(gate_x[3])
-            real_wp_y.append(gate_y[3])
-
-            # real_wp_x.append(gate_x[3] + 0.05 * np.cos(gate_yaw[3] + np.pi / 2))
-            # real_wp_y.append(gate_y[3] + 0.05 * np.sin(gate_yaw[3] + np.pi / 2))
-
-            real_wp_x.append(gate_x[3])
-            real_wp_y.append(gate_y[3] - 0.5)
-            real_wp_z = [
-                # gate_z[2],
-                gate_z[2],
-                (gate_z[2] + gate_z[3]) / 2,
-                gate_z[3],
-                # gate_z[3],
                 gate_z[3],
             ]
         reference_csp = CSP_2D(real_wp_x, real_wp_y, real_wp_z)
@@ -277,10 +261,7 @@ class Planner:
         if self.DEBUG is True:
             self.DEBUG_draw_state(path, reference_csp, fplist, ob)
 
-        if path is None:
-            return None, reference_csp, fplist
-        else:
-            return path, reference_csp, fplist
+        return path, reference_csp, fplist
 
     def DEBUG_draw_state(
         self,
