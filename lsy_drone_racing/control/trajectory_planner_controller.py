@@ -35,7 +35,7 @@ class TrajectoryController(BaseController):
         self._tick = 0
         self._freq = initial_info["env_freq"]
 
-        self.DEBUG = True  # Toggles the debug display
+        self.DEBUG = False  # Toggles the debug display
         self.SAMPLE_IDX = 10  # Controls how much farther the desired position will be
 
         self.planner = Planner(DEBUG=self.DEBUG, USE_QUINTIC_SPLINE=False, SAFETY_MARGIN=0.1)
@@ -77,7 +77,14 @@ class TrajectoryController(BaseController):
             drone_vy,
             next_gate,
         )
-
+        print("planned")
+        print(np.array(
+                    [
+                        result_path.x[self.SAMPLE_IDX],
+                        result_path.y[self.SAMPLE_IDX],
+                        result_path.z[self.SAMPLE_IDX],
+                    ]
+                ),)
         # debug display on pybullet GUI
         if self.DEBUG is True:
             if self._tick % 10 == 0:

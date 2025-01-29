@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import queue
 import threading
 import time
@@ -154,6 +156,7 @@ class MPC(BaseController):
         if self.dynamics.interface == "Mellinger":
             print(f"Next position: {action[:3]}")
             # action[3:] = np.zeros(10)
+            # action[6:9] = np.zeros(3)
         else:
             print(f"Total Thrust:", action[0], "Torques:", action[1:])
 
@@ -164,7 +167,7 @@ class MPC(BaseController):
         self.current_state = np.concatenate(
             [self.obs["pos"], self.obs["vel"], self.obs["rpy"], self.obs["ang_vel"]]
         )
-        self.set_target_trajectory()
+        self.set_target_trajectory(t_total=5)
         self.updateTargetTrajectory()
         self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
         self.opt.x_guess = self.ipopt.x_guess
@@ -176,17 +179,24 @@ class MPC(BaseController):
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
         waypoints = np.array(
+            # [
+            #     [1.0, 1.0, 0.1],
+            #     [0.8, 0.5, 0.2],
+            #     [0.55, -0.8, 0.4],
+            #     [0.2, -1.8, 0.65],
+            #     [1.1, -1.35, 1.0],
+            #     [0.2, 0.0, 0.65],
+            #     [0.0, 0.75, 0.525],
+            #     [0.0, 0.75, 1.1],
+            #     [-0.5, -0.5, 1.1],
+            #     [-0.5, -1.0, 1.1],
+            # ]
             [
-                [1.0, 1.0, 0.0],
-                [0.8, 0.5, 0.2],
-                [0.55, -0.8, 0.4],
-                [0.2, -1.8, 0.65],
-                [1.1, -1.35, 1.0],
-                [0.2, 0.0, 0.65],
-                [0.0, 0.75, 0.525],
-                [0.0, 0.75, 1.1],
-                [-0.5, -0.5, 1.1],
-                [-0.5, -1.0, 1.1],
+                [1.0, 1.0, 0.3],
+                [1.0, 1.0, 0.4],
+                [1.0, 1.0, 0.5],
+                [1.0, 1.0, 0.6],
+                [1.0, 1.0, 0.7],
             ]
         )
         # self.t_total = t_total
@@ -227,7 +237,7 @@ class MPC(BaseController):
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
         self.x_ref[:3, :] = (
-            pos_des  # np.tile(np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1))  # pos_des
+            pos_des # np.tile(np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1))  # 
         )
         self.n_step += 1
         return None

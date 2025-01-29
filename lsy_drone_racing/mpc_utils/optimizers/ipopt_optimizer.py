@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import casadi as ca
 import numpy as np
 import scipy

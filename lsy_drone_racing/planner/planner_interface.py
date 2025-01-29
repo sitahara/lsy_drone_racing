@@ -208,7 +208,7 @@ class Planner:
             real_wp_y.append(gate_y[1])
             real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
             real_wp_y.append(gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2))
-            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], gate_z[0], gate_z[1], gate_z[1]]
+            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0]+gate_z[1]/3, (gate_z[0]+gate_z[1])/2, gate_z[1], gate_z[1]]
         elif next_gate == 2:
             real_wp_x = [gate_x[0]]
             real_wp_y = [gate_y[0]]

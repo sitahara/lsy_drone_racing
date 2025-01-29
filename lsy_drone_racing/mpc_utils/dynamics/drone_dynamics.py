@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 
 import casadi as ca
@@ -256,7 +258,7 @@ class DroneDynamics(BaseDynamics):
                 tot_thrust = action[0] + action[1] + action[2] + action[3]
                 action = np.concatenate([[tot_thrust], torques])
         elif self.interface == "Mellinger":
-            action = x_sol[:, 1]
+            action = x_sol[:, 4]
             pos = action[self.state_indices["pos"]]
             vel = action[self.state_indices["vel"]]
             w = action[self.state_indices["w"]]
@@ -273,8 +275,8 @@ class DroneDynamics(BaseDynamics):
 
     def setupNominalParameters(self):
         """Setup the nominal parameters of the drone/environment/controller."""
-        self.mass = self.initial_info.get("drone_mass", 0.027)
-        self.g = 9.0
+        self.mass = self.initial_info.get("drone_mass", 0.033)
+        self.g = 9.81
         self.gv = ca.vertcat(0, 0, -self.g)
         Ixx = 1.395e-5
         Iyy = 1.436e-5
