@@ -1,14 +1,22 @@
 """Module for Model Predictive Controller implementation."""
 
+import time
+
 import casadi as ca
 import numpy as np
 import pybullet as p
+import toml
 from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
 from scipy.spatial.transform import Rotation as Rmat
 
 from lsy_drone_racing.control import BaseController
-from lsy_drone_racing.mpc_utils import AcadosOptimizer, IPOPTOptimizer, BaseDynamics, BaseCost
+from lsy_drone_racing.mpc_utils import (
+    AcadosOptimizer,
+    DroneDynamics,
+    IPOPTOptimizer,
+    MPCCppDynamics,
+)
 
 
 class MPC(BaseController):
@@ -18,93 +26,58 @@ class MPC(BaseController):
         self,
         initial_obs: NDArray[np.floating],
         initial_info: dict,
-        additonal_info: dict = {
-            "dynamics_info": {
-                "Interface": "Mellinger",  # Mellinger or Thrust
-                "ts": 1 / 60,  # Time step for the discrete dynamics, Used also for MPC
-                "n_horizon": 60,  # Number of steps in the MPC horizon, used for external cost funtion: parameter definition
-                "ControlType": "Thrusts",  # Thrusts, Torques, or MotorRPMs
-                "BaseDynamics": "Quaternion",  # Euler or Quaternion
-                "useAngVel": True,  # Currently only supports True, False if deul_ang is used instead of w
-                "useControlRates": False,  # True if u is used as state and du as control
-                "Constraints": {"Obstacles": True, "Gates": False},
-                "usePredict": False,  # True if the dynamics are predicted into the future
-                "t_predict": 0.05,  # in [s] To compensate control delay, the optimization problem is solved for the current state shifted by t_predict into the future with the current controls
-            },
-            "constraints_info": {
-                "useObstacleConstraints": True,
-                "obstacle_diameter": 0.1,
-                "useGateConstraints": False,
-                "useGoalConstraints": False,
-            },
-            "optimizer_info": {
-                "useMellinger": True,
-                "useSoftConstraints": True,
-                "soft_penalty": 1e3,
-                "useGP": False,
-                "useZoro": False,
-                "export_dir": "generated_code/mpc",
-                "optimizer": "Acados",
-            },
-            "cost_info": {
-                "cost_type": "linear",
-                "Qs_pos": np.array([10, 10, 100]),
-                "Qs_vel": np.array([0.1, 0.1, 0.1]),
-                "Qs_ang": np.array([0.1, 0.1, 0.1]),
-                "Qs_dang": np.array([0.1, 0.1, 0.1]),
-                "Qs_quat": np.array([0.01, 0.01, 0.01, 0.01]),
-                "Rs": np.array([0.01, 0.01, 0.01, 0.01]),
-                "Rd": np.array([0.01, 0.01, 0.01, 0.01]),
-                "Q_time": np.array([1]),
-                "Q_gate": np.array([1, 1, 10, 0.1, 0.1, 0.1]),  # x, y, z, roll, pitch, yaw
-            },
-        },
+        config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
         self.initial_obs = initial_obs
-        self.additional_info = additonal_info
-        self.ts = additonal_info["dynamics_info"]["ts"]
-        self.n_horizon = additonal_info["dynamics_info"]["n_horizon"]
-        # Init Dynamics including control bounds
-        self.dynamics = BaseDynamics(initial_info, initial_obs, additonal_info["dynamics_info"])
-        self.costs = BaseCost(self.dynamics, additonal_info["cost_info"])
+        config = toml.load(config_path)
 
-        # # Init reference trajectory
-        # if not additonal_info["dynamics_info"]["dynamics"] == "ThrustTime":
-        #     self.x_ref = np.tile(
-        #         self.dynamics.x_eq.reshape(self.dynamics.nx, 1), (1, self.n_horizon + 1)
-        #     )
-        #     self.u_ref = np.tile(
-        #         self.dynamics.u_eq.reshape(self.dynamics.nu, 1), (1, self.n_horizon)
-        #     )
-        #     self.setupCostFunction(additonal_info["cost_info"])
-        # else:
-        #     self.setupCostTimeFunction(additonal_info["cost_info"])
+        dynamics_info = config["dynamics_info"]
+        self.ts = dynamics_info["ts"]
+        self.n_horizon = dynamics_info["n_horizon"]
+
+        optimizer_info = config["optimizer_info"]
+        solver_options = config["solver_options"]
+        constraints_info = config["constraints_info"]
+
+        # Init Dynamics including control bounds
+        if dynamics_info["dynamicsType"] == "MPCC":
+            self.dynamics = MPCCppDynamics(
+                initial_obs,
+                initial_info,
+                dynamics_info,
+                constraints_info,
+                cost_info=config["cost_info_mpcc"],
+            )
+        else:
+            self.dynamics = DroneDynamics(
+                initial_obs,
+                initial_info,
+                dynamics_info,
+                constraints_info,
+                cost_info=config["cost_info"],
+            )
+
+        # Init reference trajectory
+        # self.dynamics.x_eq = np.zeros((self.dynamics.nx,))
+        # self.dynamics.u_eq = np.zeros((self.dynamics.nu,))
+        self.x_ref = np.tile(
+            self.dynamics.x_eq.reshape(self.dynamics.nx, 1), (1, self.n_horizon + 1)
+        )
+        self.u_ref = np.tile(self.dynamics.u_eq.reshape(self.dynamics.nu, 1), (1, self.n_horizon))
+        # print("u_ref", self.u_ref[:, :5], "x_ref", self.x_ref[:, :5])
         # Init Optimizer (acados needs also ipopt for initial guess, ipopt can be used standalone)
         self.ipopt = IPOPTOptimizer(
-            dynamics=self.dynamics,
-            costs=self.costs,
-            optimizer_info=additonal_info["optimizer_info"],
+            dynamics=self.dynamics, solver_options=solver_options, optimizer_info=optimizer_info
         )
-        if additonal_info["optimizer_info"]["optimizer"] == "Acados":
-            self.opt = AcadosOptimizer(
-                dynamics=self.dynamics,
-                costs=self.costs,
-                optimizer_info=additonal_info["optimizer_info"],
-            )
+        self.opt = AcadosOptimizer(
+            dynamics=self.dynamics, solver_options=solver_options, optimizer_info=optimizer_info
+        )
 
         self.set_target_trajectory()
-        if additonal_info["optimizer_info"]["optimizer"] == "Acados":
-            self.obs = initial_obs
-            self.current_state = np.concatenate(
-                [initial_obs["pos"], initial_obs["vel"], initial_obs["rpy"], initial_obs["ang_vel"]]
-            )
-            self.updateTargetTrajectory()
-            self.ipopt.step(self.current_state, self.costs.x_ref, self.costs.u_ref)
-            self.opt.x_guess = self.ipopt.x_guess
-            self.opt.u_guess = self.ipopt.u_guess
-            self.n_step = 0
+
+        self.calculate_initial_guess()
 
     def compute_control(
         self, obs: NDArray[np.floating], info: dict | None = None
@@ -123,18 +96,36 @@ class MPC(BaseController):
         self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]])
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
         self.updateTargetTrajectory()
+        start_time = time.time()
         if self.opt is None:
-            action = self.ipopt.step(self.current_state, self.costs.x_ref, self.costs.u_ref)
+            action = self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
         else:
-            action = self.opt.step(self.current_state, obs, self.costs.x_ref, self.costs.u_ref)
-
+            action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Control signal update time: {elapsed_time:.5f} seconds")
         print(f"Current position: {self.current_state[:3]}")
-        print(f"Desired position: {self.costs.x_ref[:3, 1]}")
-        print(f"Next position: {action[:3]}")
+        print(f"Desired position: {self.x_ref[:3, 1]}")
+        if self.dynamics.interface == "Mellinger":
+            print(f"Next position: {action[:3]}")
+            # action[3:] = np.zeros(10)
+        else:
+            print(f"Total Thrust:", action[0], "Torques:", action[1:])
 
         return action.flatten()
 
-    def set_target_trajectory(self, t_total: float = 8) -> None:
+    def calculate_initial_guess(self):
+        self.obs = self.initial_obs
+        self.current_state = np.concatenate(
+            [self.obs["pos"], self.obs["vel"], self.obs["rpy"], self.obs["ang_vel"]]
+        )
+        self.updateTargetTrajectory()
+        self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
+        self.opt.x_guess = self.ipopt.x_guess
+        self.opt.u_guess = self.ipopt.u_guess
+        self.n_step = 0
+
+    def set_target_trajectory(self, t_total: float = 9) -> None:
         """Set the target trajectory for the MPC controller."""
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
@@ -189,7 +180,9 @@ class MPC(BaseController):
             n_repeat = np.sum(t_horizon > self.t_total)
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
-        self.costs.x_ref[:3, :] = pos_des
+        self.x_ref[:3, :] = (
+            pos_des  # np.tile(np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1))  # pos_des
+        )
         self.n_step += 1
         return None
 

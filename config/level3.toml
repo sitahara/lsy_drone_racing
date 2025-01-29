@@ -81,13 +81,13 @@ ang_vel = [0, 0, 0]
 [env.randomization.drone_pos]
 type = "uniform" # Everything that can be used as a distribution in numpy.random
 # Kwargs that are permissable in the np random function
-low = [-0.1, -0.1, 0.0]
-high = [0.1, 0.1, 0.02]
+low = [-0.3, -0.3, 0.0] #[-0.1, -0.1, 0.0]
+high = [0.3, 0.3, 0.07] #[0.1, 0.1, 0.02]
 
 [env.randomization.drone_rpy]
 type = "uniform"
-low = [-0.1, -0.1, -0.1]
-high = [0.1, 0.1, 0.1]
+low = [-0.3, -0.3, -0.3] #[-0.1, -0.1, -0.1]
+high = [0.3, 0.3, 0.3] #[0.1, 0.1, 0.1]
 
 [env.randomization.drone_mass]
 type = "uniform"
@@ -101,8 +101,8 @@ high = [0.000001, 0.000001, 0.000001]
 
 [env.randomization.gate_pos]
 type = "uniform"
-low = [-0.15, -0.15, -0.1]
-high = [0.15, 0.15, 0.1]
+low = [0.0, 0.0, 0.0]#[-0.15, -0.15, -0.1]
+high = [0.0, 0.0, 0.0] #[0.15, 0.15, 0.1]
 
 [env.randomization.gate_rpy]
 type = "uniform"
