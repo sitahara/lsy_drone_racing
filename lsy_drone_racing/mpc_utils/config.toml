@@ -11,12 +11,12 @@ useDrags = true # Whether to include drag forces in the dynamics
 
 [cost_info]
 cost_type = "linear"
-Qs_pos = 1 # Position Weights
-Qs_vel = 0.05 # Velocity Weights
-Qs_ang = 0.3 # RPY Weights
+Qs_pos = 2 # Position Weights
+Qs_vel = 0.3 # Velocity Weights
+Qs_ang = 0.5 # RPY Weights
 Qs_dang = 0.1 # dRPY or body angular velocity
-Qs_quat = 0.05 # Quaternion weights
-Rs = 0.05 # Control signals
+Qs_quat = 0.3 # Quaternion weights
+Rs = 0.1 # Control signals
 Rd = 0.01 # Control rates
 
 [cost_info_mpcc]
