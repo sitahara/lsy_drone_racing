@@ -131,7 +131,7 @@ class MPC(BaseController):
         self.t_total = t_total
         waypoints = np.array(
             [
-                [1.0, 1.0, 0.0],
+                [1.0, 1.0, 0.05],
                 [0.8, 0.5, 0.2],
                 [0.55, -0.8, 0.4],
                 [0.2, -1.8, 0.65],
