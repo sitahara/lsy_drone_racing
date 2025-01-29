@@ -155,6 +155,8 @@ class Planner:
         obs_y: List[float],
         drone_x: float,
         drone_y: float,
+        drone_vx: float,
+        drone_vy: float,
         next_gate: int,
     ) -> Tuple[FrenetPath, CSP_2D, List[FrenetPath]]:
         """From gate, obstacle and position observations, returns an optimal path.
@@ -179,6 +181,10 @@ class Planner:
             Drone's X coordinate.
         drone_y : float
             Drone's Y coordinate.
+        drone_vx:
+            Drone's X velocity.
+        drone_vy:
+            Drone's Y velocity.
         drone_y : float
             Drone's S coordinate (Frenet frame).
         ##### Additional information
@@ -194,18 +200,20 @@ class Planner:
         if next_gate == 1:
             real_wp_x = [1, 0.975, gate_x[0]]
             real_wp_y = [1, 0.9, gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
-            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
+            real_wp_x.append(gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 + 0.3))
+            real_wp_y.append(gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 + 0.3))
+            real_wp_x.append(gate_x[0] + 0.7 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8))
+            real_wp_y.append(gate_y[0] + 0.7 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8))
             real_wp_x.append(gate_x[1])
             real_wp_y.append(gate_y[1])
             real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
             real_wp_y.append(gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2))
-            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], gate_z[1], gate_z[1]]
+            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], gate_z[0], gate_z[1], gate_z[1]]
         elif next_gate == 2:
             real_wp_x = [gate_x[0]]
             real_wp_y = [gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.5 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
-            real_wp_y.append(gate_y[0] + 0.5 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
+            real_wp_x.append(gate_x[0] + 0.65 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
+            real_wp_y.append(gate_y[0] + 0.65 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
             real_wp_x.append(gate_x[1])
             real_wp_y.append(gate_y[1])
             real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
@@ -251,10 +259,15 @@ class Planner:
 
         # find out where I am w.r.t. reference spline
         s, d = reference_csp.cartesian_to_frenet(drone_x, drone_y)
+        yaw = reference_csp.calc_yaw(s)
+
+        # Convert velocity in cartesian frame to frenet frame
+        drone_vs =  np.cos(yaw) * drone_vx + np.sin(yaw) * drone_vy #  # noqa: F841, unused but here for aesthetics reason
+        drone_vd = -np.sin(yaw) * drone_vx + np.cos(yaw) * drone_vy
 
         # Generate path
         fplist, best_idx, path = self.planner_core.frenet_optimal_planning(
-            reference_csp, s, d, 0.0, 0.0, ob
+            reference_csp, s, d, drone_vd, 0.0, ob
         )
 
         # Debug plotting

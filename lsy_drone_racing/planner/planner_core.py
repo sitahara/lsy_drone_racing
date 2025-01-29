@@ -28,6 +28,8 @@ class PlannerCore:
     ):
         """Initialize planning parameters.
 
+        Invoking this doesn't trigger any planning.
+
         Args:
             MAX_CURVATURE:
                 Maximum allowed curvature of the trajectory on the Cartesian frame.
@@ -112,7 +114,7 @@ class PlannerCore:
 
             lat_qp = None
             if self.USE_QUINTIC_SPLINE is True:
-                lat_qp = QuinticSpline_2D(self.T_PRED, d0, 0.0, 0.0, di)
+                lat_qp = QuinticSpline_2D(self.T_PRED, d0, d_d0, 0.0, di)
             else:
                 lat_qp = Line_2D(self.T_PRED, d0, di)
 
