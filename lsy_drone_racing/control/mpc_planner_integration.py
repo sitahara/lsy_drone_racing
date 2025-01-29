@@ -28,8 +28,8 @@ class MPC(BaseController):
         initial_obs: NDArray[np.floating],
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
-        visualize: bool = True,
-        separate_thread: bool = False,
+        visualize: bool = False,
+        separate_thread: bool = True,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
@@ -108,7 +108,7 @@ class MPC(BaseController):
             next_gate = initial_obs["target_gate"] + 1
             drone_x, drone_y = initial_obs["pos"][0], initial_obs["pos"][1]
             result_path, _, _ = self.planner.plan_path_from_observation(
-                gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+                gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, 0, 0, next_gate
             )
             num_points = len(result_path.x)
             self.x_ref[0, :num_points] = np.array(result_path.x)
@@ -116,7 +116,7 @@ class MPC(BaseController):
             self.x_ref[2, :num_points] = np.array(result_path.z)
 
             self.planner_thread = threading.Thread(target=self.do_planning, daemon=True)
-            self.planner_thread.start()
+            # self.planner_thread.start()
 
         self.calculate_initial_guess()
 
@@ -259,7 +259,17 @@ class MPC(BaseController):
     #             next_gate = self.obs["target_gate"] + 1
     #             drone_x, drone_y = self.obs["pos"][0], self.obs["pos"][1]
     #             result_path, ref_path, _ = self.planner.plan_path_from_observation(
-    #                 gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+    #                 gate_x,
+    #                 gate_y,
+    #                 gate_z,
+    #                 gate_yaw,
+    #                 obs_x,
+    #                 obs_y,
+    #                 drone_x,
+    #                 drone_y,
+    #                 0,
+    #                 0,
+    #                 next_gate,
     #             )
     #             num_points = len(result_path.x)
     #             self.x_ref[0, :num_points] = np.array(result_path.x)
@@ -297,7 +307,7 @@ class MPC(BaseController):
             next_gate = obs["target_gate"] + 1
             drone_x, drone_y = obs["pos"][0], obs["pos"][1]
             result_path, ref_path, _ = self.planner.plan_path_from_observation(
-                gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+                gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, 0, 0, next_gate
             )
 
             # Put the result to queue for commumication
