@@ -1,9 +1,9 @@
 [dynamics_info]
-interface = "Mellinger" # "Mellinger", "Thrust"
-ts = 0.016666666
+interface = "Mellinger" # "Mellinger", "Thrust" (Thrust doesnt work well)
+ts = 0.016666666 # 60Hz
 n_horizon = 60
-controlType = "Thrusts" # "Thrusts", 
-dynamicsType= "MPCC" # "Quaternion", "Euler", "MPCC"
+controlType = "Thrusts" # "Thrusts", "RPMs", "Torques"
+dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
 useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
@@ -11,12 +11,12 @@ useDrags = true # Whether to include drag forces in the dynamics
 
 [cost_info]
 cost_type = "linear"
-Qs_pos = 1
-Qs_vel = 0.01
-Qs_ang = 0.5
-Qs_dang = 0.01
-Qs_quat = 0.1
-Rs = 0.1
+Qs_pos = 1 # Position Weights
+Qs_vel = 0.05 # Velocity Weights
+Qs_ang = 0.3 # RPY Weights
+Qs_dang = 0.1 # dRPY or body angular velocity
+Qs_quat = 0.05 # Quaternion weights
+Rs = 0.05 # Control signals
 Rd = 0.01 # Control rates
 
 [cost_info_mpcc]
@@ -29,11 +29,11 @@ Rdf = 0.01 # thrust rate weights
 Rdprogress = 0.01
 
 [constraints_info]
-useObstacleConstraints = true
-obstacle_diameter = 0.15
+useObstacleConstraints = true # true, false
+obstacle_diameter = 0.15 # [m]
 tunnel_constraints = true # only for MPCC dynamics
-Wn = 0.3
-Wgate = 0.1
+Wn = 0.3 # Nominal Tunnel Width
+Wgate = 0.1 # Tunnel Width at Gates
 
 [optimizer_info]
 useSoftConstraints = true
