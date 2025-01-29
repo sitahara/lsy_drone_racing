@@ -156,7 +156,7 @@ class MPC(BaseController):
             # action[3:] = np.zeros(10)
         else:
             print(f"Total Thrust:", action[0], "Torques:", action[1:])
-
+        # action[6:9] = np.zeros(3)
         return action.flatten()
 
     def calculate_initial_guess(self):

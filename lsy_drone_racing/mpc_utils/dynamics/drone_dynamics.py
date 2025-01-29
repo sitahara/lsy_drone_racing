@@ -274,7 +274,7 @@ class DroneDynamics(BaseDynamics):
     def setupNominalParameters(self):
         """Setup the nominal parameters of the drone/environment/controller."""
         self.mass = self.initial_info.get("drone_mass", 0.027)
-        self.g = 9.0
+        self.g = 9.81
         self.gv = ca.vertcat(0, 0, -self.g)
         Ixx = 1.395e-5
         Iyy = 1.436e-5
@@ -475,7 +475,7 @@ class DroneDynamics(BaseDynamics):
         """Setup the linear (Quadratic) costs of form: (sum_i ||x_i-x_ref_i||_{Qs}^2 + ||u_i-u_ref_i||_{R}^2) + ||x_N-x_ref_N||_{Qt}^2."""
         self.cost_type = "linear"
         Qs_pos = self.cost_info.get("Qs_pos", 1)
-        Qs_pos = np.array([Qs_pos, Qs_pos, Qs_pos * 5])
+        Qs_pos = np.array([Qs_pos, Qs_pos, Qs_pos])
         Qs_vel = self.cost_info.get("Qs_vel", 0.1)
         Qs_vel = np.array([Qs_vel, Qs_vel, Qs_vel])
         Qs_ang = self.cost_info.get("Qs_ang", 0.1)
@@ -521,13 +521,13 @@ class DroneDynamics(BaseDynamics):
 
     def LQ_stageCost(self, x, u, p, x_ref=None, u_ref=None):
         """Compute the LQR cost."""
-        return ca.mtimes([(x - x_ref).T, self.Qs, x - x_ref]) + ca.mtimes(
+        return ca.mtimes([(x - x_ref).T, self.Qs, (x - x_ref)]) + ca.mtimes(
             [(u - u_ref).T, self.R, u - u_ref]
         )
 
     def LQ_terminalCost(self, x, u, p, x_ref=None, u_ref=None):
         """Compute the LQR cost."""
-        return ca.mtimes([(x - x_ref).T, self.Qt, x - x_ref])
+        return ca.mtimes([(x - x_ref).T, self.Qt, (x - x_ref)])
 
     def updateParameters(self, obs: dict = None, init: bool = False) -> np.ndarray:
         """Update the parameters of the drone/environment controller."""
@@ -642,7 +642,7 @@ class DroneDynamics(BaseDynamics):
         # State limits (from the observation space, )
         x_y_max = 3.0
         z_max = 2.5
-        z_min = 0.05  # 5 cm above the ground, to avoid hitting the ground
+        z_min = 0.07  # 5 cm above the ground, to avoid hitting the ground
         eul_ang_max = 75 / 180 * np.pi  # 85 degrees in radians, reduced to 75 for safety
         large_val = 1e4
         self.pos_lb = np.array([-x_y_max, -x_y_max, z_min]).T

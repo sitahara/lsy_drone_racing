@@ -1,6 +1,6 @@
 [dynamics_info]
-interface = "Mellinger" # "Mellinger", "Thrust"
-ts = 0.016666666
+interface = "Thrust" # "Mellinger", "Thrust"
+ts = 0.016666
 n_horizon = 60
 controlType = "Thrusts" # "Thrusts", 
 dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
@@ -11,12 +11,12 @@ useDrags = true # Whether to include drag forces in the dynamics
 
 [cost_info]
 cost_type = "linear"
-Qs_pos = 1
+Qs_pos = 5
 Qs_vel = 0.01
 Qs_ang = 0.5
 Qs_dang = 0.01
-Qs_quat = 0.1
-Rs = 0.1
+Qs_quat = 0.03
+Rs = 0.01
 Rd = 0.01 # Control rates
 
 [cost_info_mpcc]
