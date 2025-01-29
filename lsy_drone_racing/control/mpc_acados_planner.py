@@ -44,7 +44,7 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
         useZoro: bool = False,
         json_file: str = "acados_ocp",
         visualize: bool = False,
-        separate_thread: bool=False,
+        separate_thread: bool = False,
     ):
         """Initialize the MPC_ACADOS controller.
 
@@ -87,8 +87,14 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
         # Since the planner is slow, run the planner on a separate thread
         self.queue_state = queue.Queue()
         self.queue_trajectory = queue.Queue()
-        self.planner = Planner(MAX_ROAD_WIDTH=0.5, D_ROAD_W=0.1,DT=0.015, NUM_POINTS=self.n_horizon, DEBUG=(visualize and not separate_thread))
-        
+        self.planner = Planner(
+            MAX_ROAD_WIDTH=0.5,
+            D_ROAD_W=0.1,
+            DT=0.015,
+            NUM_POINTS=self.n_horizon,
+            DEBUG=(visualize and not separate_thread),
+        )
+
         if separate_thread:
             ## Since the controller requires the existence of x_ref, we will plan once in advance
             ## using initial observation
@@ -475,8 +481,8 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
                 self.x_ref[0, :num_points] = np.array(result_path.x)
                 self.x_ref[1, :num_points] = np.array(result_path.y)
                 self.x_ref[2, :num_points] = np.array(result_path.z)
-            except queue.Empty: # Trajectory queue is empty
-                pass # It's empty because we've fetched the latest trajectory - wait until we get the newest trajectory
+            except queue.Empty:  # Trajectory queue is empty
+                pass  # It's empty because we've fetched the latest trajectory - wait until we get the newest trajectory
         else:
             if self.n_step % 10 == 0:
                 gate_x, gate_y, gate_z = (
@@ -488,8 +494,19 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
                 obs_x, obs_y = self.obs["obstacles_pos"][:, 0], self.obs["obstacles_pos"][:, 1]
                 next_gate = self.obs["target_gate"] + 1
                 drone_x, drone_y = self.obs["pos"][0], self.obs["pos"][1]
+                drone_vx, drone_vy = self.obs["vel"][0], self.obs["vel"][1]
                 result_path, ref_path, _ = self.planner.plan_path_from_observation(
-                    gate_x, gate_y, gate_z, gate_yaw, obs_x, obs_y, drone_x, drone_y, next_gate
+                    gate_x,
+                    gate_y,
+                    gate_z,
+                    gate_yaw,
+                    obs_x,
+                    obs_y,
+                    drone_x,
+                    drone_y,
+                    drone_vx,
+                    drone_vy,
+                    next_gate,
                 )
                 num_points = len(result_path.x)
                 self.x_ref[0, :num_points] = np.array(result_path.x)
@@ -512,9 +529,9 @@ class MPC_ACADOS_PLANNER(MPC_BASE):
             # Fetch recent observation
             try:
                 obs = self.queue_state.get_nowait()
-            except queue.Empty: # State Queue is empty
+            except queue.Empty:  # State Queue is empty
                 continue
-            
+
             # Plan based on the fetched observation
             gate_x, gate_y, gate_z = (
                 obs["gates_pos"][:, 0],
