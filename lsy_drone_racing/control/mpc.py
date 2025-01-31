@@ -27,10 +27,13 @@ class MPC(BaseController):
         initial_obs: NDArray[np.floating],
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
+        hyperparams: dict = None,
+        print_info: bool = False,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
         self.initial_obs = initial_obs
+        self.print_info = print_info
         config = toml.load(config_path)
 
         dynamics_info = config["dynamics_info"]
@@ -41,22 +44,44 @@ class MPC(BaseController):
         solver_options = config["solver_options"]
         constraints_info = config["constraints_info"]
 
+        cost_info = config["cost_info"]
+        mpcc_cost_info = config["cost_info_mpcc"]
+
+        # For hyperparameter tuning
+        self.tot_error = 0
+        self.collided = False
+        self.target_gate = initial_obs["target_gate"]
+        self.gate_times = np.zeros(self.initial_obs["gates_visited"].shape[0])
+        self.number_gates_passed = 0
+
+        if hyperparams is not None:
+            cost_info["Qs_pos"] = hyperparams.get("Qs_pos", cost_info["Qs_pos"])
+            cost_info["Qs_vel"] = hyperparams.get("Qs_vel", cost_info["Qs_vel"])
+            cost_info["Qs_ang"] = hyperparams.get("Qs_ang", cost_info["Qs_ang"])
+            cost_info["Qs_dang"] = hyperparams.get("Qs_dang", cost_info["Qs_dang"])
+            cost_info["Qs_quat"] = hyperparams.get("Qs_quat", cost_info["Qs_quat"])
+
+            cost_info["Qt_pos"] = hyperparams.get("Qt_pos", cost_info["Qs_pos"])
+            cost_info["Qt_vel"] = hyperparams.get("Qt_vel", cost_info["Qs_vel"])
+            cost_info["Qt_ang"] = hyperparams.get("Qt_ang", cost_info["Qs_ang"])
+            cost_info["Qt_dang"] = hyperparams.get("Qt_dang", cost_info["Qs_dang"])
+            cost_info["Qt_quat"] = hyperparams.get("Qt_quat", cost_info["Qs_quat"])
+
+            cost_info["Rs"] = hyperparams.get("Rs", cost_info["Rs"])
+            cost_info["Rd"] = hyperparams.get("Rd", cost_info["Rd"])
+
+            optimizer_info["softPenalty"] = hyperparams.get(
+                "softPenalty", optimizer_info["softPenalty"]
+            )
+
         # Init Dynamics including control bounds
         if dynamics_info["dynamicsType"] == "MPCC":
             self.dynamics = MPCCppDynamics(
-                initial_obs,
-                initial_info,
-                dynamics_info,
-                constraints_info,
-                cost_info=config["cost_info_mpcc"],
+                initial_obs, initial_info, dynamics_info, constraints_info, cost_info=mpcc_cost_info
             )
         else:
             self.dynamics = DroneDynamics(
-                initial_obs,
-                initial_info,
-                dynamics_info,
-                constraints_info,
-                cost_info=config["cost_info"],
+                initial_obs, initial_info, dynamics_info, constraints_info, cost_info=cost_info
             )
 
         # Init reference trajectory
@@ -103,16 +128,54 @@ class MPC(BaseController):
             action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
         end_time = time.time()
         elapsed_time = end_time - start_time
-        print(f"Control signal update time: {elapsed_time:.5f} seconds")
-        print(f"Current position: {self.current_state[:3]}")
-        print(f"Desired position: {self.x_ref[:3, 1]}")
-        if self.dynamics.interface == "Mellinger":
-            print(f"Next position: {action[:3]}")
-            # action[3:] = np.zeros(10)
-        else:
-            print(f"Total Thrust:", action[0], "Torques:", action[1:])
+        # print(f"Control signal update time: {elapsed_time:.5f} seconds")
+        # print(f"Current position: {self.current_state[:3]}")
+        if self.print_info:
+            print(f"Desired position: {self.x_ref[:3, 1]}")
+            if self.dynamics.interface == "Mellinger":
+                print(f"Next position: {action[:3]}")
+                action[6:9] = np.zeros(3)
+            elif self.dynamics.interface == "Thrust":
+                print(f"Total Thrust:", action[0], "Torques:", action[1:])
 
         return action.flatten()
+
+    def step_callback(self, action, obs, reward, terminated, truncated, info):
+        """Callback function called once after the control step.
+
+        You can use this function to update your controller's internal state, save training data,
+        update your models, etc.
+
+        Instructions:
+            Use any collected information to learn, adapt, and/or re-plan.
+
+        Args:
+            action: Latest applied action.
+            obs: Latest environment observation.
+            reward: Latest reward.
+            terminated: Latest terminated flag.
+            truncated: Latest truncated flag.
+            info: Latest information dictionary.
+        """
+        self.tot_error += np.linalg.norm(obs["pos"] - self.x_ref[:3, 0])
+        if obs["target_gate"] != self.target_gate:
+            if self.target_gate != 0:
+                self.gate_times[self.target_gate] = (
+                    self.n_step * self.ts - self.gate_times[self.target_gate - 1]
+                )
+            else:
+                self.gate_times[self.target_gate] = self.n_step * self.ts
+            self.number_gates_passed += 1
+            self.target_gate = obs["target_gate"]
+        # print(f"Error: {self.tot_error * self.ts}")
+        if len(info["collisions"]) > 0:
+            self.collided = True
+            self.gate_times[self.target_gate :] = 1e9
+
+    def episode_callback(self):
+        # print("Episode finished")
+        # print(f"Reported error: {self.tot_error * self.ts}")
+        return self.tot_error * self.ts, self.collided, self.gate_times, self.number_gates_passed
 
     def calculate_initial_guess(self):
         self.obs = self.initial_obs

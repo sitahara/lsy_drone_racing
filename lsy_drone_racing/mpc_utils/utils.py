@@ -164,7 +164,7 @@ def rpm_to_torques_mat(c_tau_xy: float, cd: float) -> np.ndarray:
 
 
 def W1(eul_ang: np.ndarray) -> np.ndarray:
-    """Compute the numpy W1 matrix from euler angles."""
+    """Compute the numpy W1 matrix from euler angles. w = W1 * drpy."""
     phi, theta = eul_ang[0], eul_ang[1]
     return np.array(
         [
@@ -176,7 +176,7 @@ def W1(eul_ang: np.ndarray) -> np.ndarray:
 
 
 def W2(eul_ang: np.ndarray) -> np.ndarray:
-    """Compute the W2 matrix from euler angles."""
+    """Compute the W2 matrix from euler angles. drpy = W2 * w."""
     phi, theta = eul_ang[0], eul_ang[1]
     return np.array(
         [
