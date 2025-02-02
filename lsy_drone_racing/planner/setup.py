@@ -1,4 +1,6 @@
-from setuptools import setup, find_packages
+"""Planning module for lsy drone racing course."""
+
+from setuptools import find_packages, setup
 
 setup(
     name="planner",  # Name of your package

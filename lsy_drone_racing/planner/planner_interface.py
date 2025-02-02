@@ -118,32 +118,30 @@ class Planner:
         """
         obs_center_x = []
         obs_center_y = []
-        obs_radius = []
+        obs_diameter = []
 
-        # Creating fixed obstacles
-        for i in range(len(ob_x)):
-            obs_center_x.append(ob_x[i])
-            obs_center_y.append(ob_y[i])
-            obs_radius.append(0.1 * expand_rate)
-
-        # Creating horizontal gate frames
+        # Creating obstacles
+        ob_x = [ob_x[0], 0.5, ob_x[3], 0.0]
+        ob_y = [ob_y[0], -1.5, ob_y[3], 1.0]
         ## Length of the vertex of the frame is 0.58m
         line_length = 0.58 / 2
-        for i in range(len(gate_x)):
-            ## Calculate the line's endpoint
-            dx = line_length * np.cos(gate_yaw[i])  # X direction offset
-            dy = line_length * np.sin(gate_yaw[i])  # Y direction offset
-            ## Calculate the 2D position of two vertical gate frames
-            obs_center_x.append(gate_x[i] + dx)
-            obs_center_y.append(gate_y[i] + dy)
-            obs_radius.append(0.09 * expand_rate)
 
-            obs_center_x.append(gate_x[i] - dx)
-            obs_center_y.append(gate_y[i] - dy)
-            obs_radius.append(0.09 * expand_rate)
+        obs_center_x = [ob_x[i] for i in range(len(ob_x))] +\
+                       [gate_x[i] + line_length * np.cos(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_x[i] - line_length * np.cos(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_x[i] + 1.5* line_length * np.cos(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_x[i] - 1.5* line_length * np.cos(gate_yaw[i]) for i in range(len(gate_x))]
+        obs_center_y = [ob_y[i] for i in range(len(ob_x))] +\
+                       [gate_y[i] + line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_y[i] - line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_y[i] + 1.5* line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))] +\
+                       [gate_y[i] - 1.5* line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))]
+        obs_diameter = [(i%2!=0)*0.35+(i%2==0)*0.15 for i in range(len(ob_x))] +\
+                       [0.1 * expand_rate for _ in range(len(gate_x)*4)]
+
 
         # Turns three independent lists into one list of tuples
-        return list(zip(obs_center_x, obs_center_y, obs_radius))
+        return list(zip(obs_center_x, obs_center_y, obs_diameter))
 
     def plan_path_from_observation(
         self,
@@ -198,58 +196,74 @@ class Planner:
         real_wp_z = None
         ## Heurestically adjust points to use when creating reference spline
         if next_gate == 1:
-            real_wp_x = [1, 0.975, gate_x[0]]
-            real_wp_y = [1, 0.9, gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 + 0.3))
-            real_wp_y.append(gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 + 0.3))
-            real_wp_x.append(gate_x[0] + 0.7 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8))
-            real_wp_y.append(gate_y[0] + 0.7 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8))
-            real_wp_x.append(gate_x[1])
-            real_wp_y.append(gate_y[1])
-            real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
-            real_wp_y.append(gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2))
-            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], gate_z[0], gate_z[1], gate_z[1]]
+            real_wp_x = [
+                1, 
+                0.975,
+                gate_x[0],
+                gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 + 0.3),
+                gate_x[0] + 0.7 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8),
+                gate_x[1],
+                gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2)]
+            real_wp_y = [
+                1,
+                0.9,
+                gate_y[0],
+                gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 + 0.3),
+                gate_y[0] + 0.7 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8),
+                gate_y[1],
+                gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2)]
+            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], (gate_z[0]+gate_z[1])/2, gate_z[1], gate_z[1]]
         elif next_gate == 2:
-            real_wp_x = [gate_x[0]]
-            real_wp_y = [gate_y[0]]
-            real_wp_x.append(gate_x[0] + 0.65 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7))
-            real_wp_y.append(gate_y[0] + 0.65 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7))
-            real_wp_x.append(gate_x[1])
-            real_wp_y.append(gate_y[1])
-            real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
-            real_wp_y.append(gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2))
-            real_wp_x.append(gate_x[2])
-            real_wp_y.append(gate_y[2])
-            real_wp_x.append(gate_x[2] + 0.05 * np.cos(gate_yaw[2] + np.pi / 2))
-            real_wp_y.append(gate_y[2] + 0.05 * np.sin(gate_yaw[2] + np.pi / 2))
-            real_wp_z = [gate_z[0], gate_z[0], gate_z[1], gate_z[1], gate_z[2], gate_z[2]]
+            real_wp_x = [
+                gate_x[0],
+                gate_x[0] + 0.65 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_x[1],
+                gate_x[1] - 0.0 * np.cos(gate_yaw[1]) + 0.1 * np.cos(gate_yaw[1] + np.pi / 2),
+                gate_x[2],
+                gate_x[2] + 0.05 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6),]
+            real_wp_y = [
+                gate_y[0],
+                gate_y[0] + 0.65 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_y[1],
+                gate_y[1] - 0.0 * np.sin(gate_yaw[1]) + 0.1 * np.sin(gate_yaw[1] + np.pi / 2),
+                gate_y[2],
+                gate_y[2] + 0.05 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6),]
+            real_wp_z = [
+                gate_z[0],
+                (gate_z[0]+gate_z[1])/2,
+                gate_z[1],
+                gate_z[1],
+                gate_z[2],
+                gate_z[2]]
         elif next_gate == 3 or next_gate == 4:
-            real_wp_x = [gate_x[1]]
-            real_wp_y = [gate_y[1]]
+            real_wp_x = [
+                gate_x[1] + 0.1 * np.cos(gate_yaw[1]),
+                gate_x[1] + 0.1 * np.cos(gate_yaw[1] + np.pi / 2 - 0.2),
+                gate_x[2] + 0.1 * np.cos(gate_yaw[2]) + 0.05 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6),
+                (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2,
+                (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2 - 0.2,
+                (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2 - 0.4,
+                gate_x[3] + 0.13,
+                gate_x[3] + 0.13 + 0.5 * np.cos(gate_yaw[3] + np.pi / 2 + 0.1)
+                ]
+            real_wp_y = [
+                gate_y[1] + 0.1 * np.sin(gate_yaw[1]),
+                gate_y[1] + 0.1 * np.sin(gate_yaw[1] + np.pi / 2 - 0.2),
+                gate_y[2] + 0.1 * np.sin(gate_yaw[2]) + 0.05 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6),
+                (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2,
+                (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2 + 0.1,
+                (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2 + 0.1,
+                gate_y[3],
+                gate_y[3] + 0.5 * np.sin(gate_yaw[3] + np.pi / 2 + 0.1)
+                ]
 
-            real_wp_x.append(gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2))
-            real_wp_y.append(gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2))
-
-            real_wp_x.append(gate_x[2])
-            real_wp_y.append(gate_y[2])
-
-            real_wp_x.append(gate_x[2] + 0.3 * np.cos(gate_yaw[2] + np.pi / 2 + 0.4))
-            real_wp_y.append(gate_y[2] + 0.3 * np.sin(gate_yaw[2] + np.pi / 2 + 0.4))
-
-            real_wp_x.append(gate_x[2] - 0.3)
-            real_wp_y.append(gate_y[2] + 0.3)
-
-            real_wp_x.append(gate_x[3])
-            real_wp_y.append(gate_y[3])
-
-            real_wp_x.append(gate_x[3] + 0.5 * np.cos(gate_yaw[3] + np.pi / 2))
-            real_wp_y.append(gate_y[3] + 0.5 * np.sin(gate_yaw[3] + np.pi / 2))
             real_wp_z = [
                 gate_z[1],
                 gate_z[1],
-                gate_z[2],
-                gate_z[2],
-                (gate_z[2] + gate_z[3]) / 2,
+                gate_z[2]-0.15,
+                gate_z[2]-0.1,
+                4*gate_z[2]/5 + 1*gate_z[3]/5,
+                3.5*gate_z[2]/5 + 1.5*gate_z[3]/5,
                 gate_z[3],
                 gate_z[3],
             ]
@@ -293,6 +307,9 @@ class Planner:
         # Reference trajectory
         self.ax.plot(ref_csp.x_sampled, ref_csp.y_sampled, "-b")
 
+        # Knot points
+        self.ax.plot(ref_csp.knot_x, ref_csp.knot_y, "*r")
+
         # All predicted trajectories
         for fp in fplist:
             self.ax.plot(fp.x, fp.y)
@@ -301,7 +318,7 @@ class Planner:
         for i in range(len(obstacles)):
             circle = patches.Circle(
                 (obstacles[i][0], obstacles[i][1]),
-                obstacles[i][2],
+                obstacles[i][2]/2,
                 edgecolor="green",
                 facecolor="none",
                 lw=2,
