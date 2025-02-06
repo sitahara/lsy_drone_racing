@@ -24,6 +24,8 @@ class PlannerCore:
         K_D: float = 5.0,
         SAFETY_MARGIN: float = 0.05,
         USE_QUINTIC_SPLINE: bool = False,
+        CURVATURE_PENALTY: float = 3000,
+        COLLISION_PENALTY: float = 100000, 
         DEBUG: bool = False,
     ):
         """Initialize planning parameters.
@@ -51,6 +53,10 @@ class PlannerCore:
             USE_QUINTIC_SPLINE:
                 If True, uses quintic spline curve as the candidate trajectory in frenet frame.
                 Otherwise uses lines
+            CURVATURE_PENALTY:
+                Sets the penalty for exceeding maximum curvature on one point
+            COLLISION_PENALTY:
+                Sets the penalty for one trajectory point being in any obstacles
             DEBUG:
                 Enables or disables output of some parameters to the console.
         """
@@ -64,6 +70,8 @@ class PlannerCore:
         # Cost weights
         self.K_J = K_J
         self.K_D = K_D
+        self.CURVATURE_PENALTY = CURVATURE_PENALTY
+        self.COLLISION_PENALTY = COLLISION_PENALTY
 
         # Safety margin for obstacle avoidance
         self.SAFETY_MARGIN = SAFETY_MARGIN
@@ -196,8 +204,7 @@ class PlannerCore:
                 on both sides of the XY plane.
 
         Returns:
-            `True` if the sampled points of the path are free from collisions,
-            `False` if there is any collision.
+            Number of points in keep-out zones.
         """
         # Convert path points to numpy arrays
         fp_x = np.array(fp.x)
@@ -246,8 +253,8 @@ class PlannerCore:
         """
         for i, _ in enumerate(fplist):
             if any([abs(c) > self.MAX_CURVATURE for c in fplist[i].c]):  # Maximum curvature check
-                fplist[i].cost += 3000
-            fplist[i].cost += 100000 * self.check_collision(fplist[i], ob)
+                fplist[i].cost += self.CURVATURE_PENALTY
+            fplist[i].cost += self.COLLISION_PENALTY * self.check_collision(fplist[i], ob)
 
         return fplist
 
