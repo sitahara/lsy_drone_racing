@@ -1,22 +1,31 @@
 [dynamics_info]
-interface = "Thrust" # "Mellinger", "Thrust"
+interface = "Mellinger" # "Mellinger", "Thrust"
 ts = 0.016666
 n_horizon = 60
-controlType = "Thrusts" # "Thrusts", 
+controlType = "Torques" # "Thrusts", "Torques"
 dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
 useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
+[dynamics_info.ukf_info]
+useUKF=false
+measurement_noise=0.01 # std
+action_disturbance=0.001 # std
+process_noise= 0.01 # std
 
-
-[cost_info]
+[cost_info] # Optimize through TurBO
 cost_type = "linear"
-Qs_pos = 5
-Qs_vel = 0.01
-Qs_ang = 0.5
-Qs_dang = 0.01
-Qs_quat = 0.03
-Rs = 0.01
+Qs_pos = 4 #4
+Qs_vel = 0.05
+Qs_rpy = 0.6
+Qs_drpy = 0.1 # 0.05
+Qs_quat = 0.01 #0.1
+Qt_pos = 10
+Qt_vel = 0.004
+Qt_rpy = 0.08
+Qt_drpy = 2
+Qt_quat = 2
+Rs = 0.2 #0.2
 Rd = 0.01 # Control rates
 
 [cost_info_mpcc]
@@ -55,3 +64,6 @@ acados_qp_solver= "PARTIAL_CONDENSING_HPIPM"
 acados_globalization= "MERIT_BACKTRACKING"
 acados_tol= 1e-3
 acados_qp_tol= 1e-3
+
+[hyperparameters]
+[hyperparameters.linear_cost]

@@ -29,13 +29,14 @@ class Levy:
     def __init__(self, x0):
         # Define the bounds of the hyperparameters around the initial guess
         self.dim = len(x0)
-        self.lb = 0.1 * x0
-        self.ub = 10 * x0
+        self.lb = 0.4 * x0
+        self.ub = 2.5 * x0
 
     def __call__(self, x):
         assert len(x) == self.dim
         assert x.ndim == 1
         assert np.all(x <= self.ub) and np.all(x >= self.lb)
+        x = np.around(x, 3)
         cost = 0.0
         hyperparams = {
             "Qs_pos": x[0],
@@ -52,7 +53,7 @@ class Levy:
         }
         try:
             avg_error, avg_collided, avg_gate_times, avg_num_gates_passed = do_simulation(
-                hyperparams, n_runs=1
+                hyperparams, n_runs=3
             )
             cost = self.cost_function(avg_error, avg_collided, avg_gate_times, avg_num_gates_passed)
         except BaseException as e:  # Solver error - penalize harshly
@@ -74,13 +75,13 @@ class Levy:
         print("avg collided", avg_collided)
         print("avg error", avg_error)
         cost = 0.0
-        cost += 700 * avg_collided
-        cost += 100 * avg_error
+        cost += 300 * avg_collided
+        cost += 50 * avg_error
         for i in range(len(avg_gate_times)):
             if avg_gate_times[i] > 0:
-                cost -= 100 * avg_num_gates_passed / avg_gate_times[i]
+                cost -= 50 * avg_num_gates_passed / avg_gate_times[i]
             else:
-                cost += 100
+                cost += 30
         print(f"cost: {cost}")
         return cost
 
@@ -149,8 +150,6 @@ def do_simulation(
                 controller.episode_callback()
             )  # Update the controller internal state and models.
 
-            # Debug prints to check dimensions
-
             avg_error += error / n_runs
             avg_collided += int(collided) / n_runs
             avg_gate_times += gate_times / n_runs
@@ -170,7 +169,7 @@ def do_optimization():
     # create optimizer instance
     # Hyperparameters for TuRBO 6 parameters, only 5 active (either Qs_ang or Qs_quat)
     # [Qs_pos, Qs_vel, Qs_ang, Qs_quat, Qs_dang, Qt_pos, Qt_vel, Qt_ang, Qt_quat, Qt_dang,Rs, softPenalty]
-    x0 = np.array([2, 0.1, 0.5, 0.05, 0.1, 10, 0.005, 0.1, 2, 2, 0.2]).T
+    x0 = np.array([10, 0.03, 1.5, 0.3, 0.02, 13, 0.1, 0.2, 4, 0.2, 2]).T
     f = Levy(x0)
 
     n_init = 2 * len(x0)
@@ -181,7 +180,7 @@ def do_optimization():
         n_init=n_init,  # Number of initial bounds from an Latin hypercube design
         max_evals=300,  # Maximum number of evaluations
         batch_size=10,  # How large batch size TuRBO uses
-        n_trust_regions=8,  # Sets m
+        n_trust_regions=11,  # Sets m
         verbose=True,  # Print information from each batch
         use_ard=True,  # Set to true if you want to use ARD for the GP kernel
         max_cholesky_size=2000,  # When we switch from Cholesky to Lanczos
@@ -194,6 +193,17 @@ def do_optimization():
     turbo.optimize()
     X = turbo.X  # Evaluated points
     fX = turbo.fX  # Observed values
+    # Extract the best 10 observed values and corresponding evaluated points
+
+    indices_best_10 = np.argsort(fX)[:10]
+    f_best_10 = fX[indices_best_10]
+    x_best_10 = X[indices_best_10, :]
+
+    print("Best 10 values found:")
+    for i in range(10):
+        print(f"{i + 1}: f(x) = {f_best_10[i]:.3f}, x = {np.around(x_best_10[i], 3)}")
+
+    # Extract the best overall value
     ind_best = np.argmin(fX)
     f_best, x_best = fX[ind_best], X[ind_best, :]
     print(

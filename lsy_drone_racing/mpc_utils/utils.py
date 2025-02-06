@@ -16,10 +16,33 @@ def quaternion_conjugate(q: ca.MX) -> ca.MX:
     return ca.vertcat(-q[0], -q[1], -q[2], q[3])
 
 
+def quaternion_inverse(q: ca.MX) -> ca.MX:
+    """Compute the inverse of a quaternion [qx,qy,qz,qw]."""
+    return quaternion_conjugate(q) / ca.dot(q, q)
+
+
 def quaternion_rotation(q: ca.MX, v: ca.MX) -> ca.MX:
-    """Rotate a vector by a quaternion [qx,qy,qz,qw]."""
+    """Rotate a vector [vx,vy,vz,0] by a quaternion [qx,qy,qz,qw]."""
     t = 2 * ca.cross(q[:-1], v)
     return v + q[-1] * t + ca.cross(q[:-1], t)
+
+
+def quaternion_active_rotation(q: ca.MX, v: ca.MX) -> ca.MX:
+    """Rotate a vector [vx,vy,vz,0] by a quaternion [qx,qy,qz,qw]."""
+    p = ca.vertcat(v, 0)
+    q_inv = quaternion_inverse(q)
+    q_p = quaternion_product(p, q)
+    p_rot = quaternion_product(q_inv, q_p)
+    return p_rot[:-1]
+
+
+def quaternion_passive_rotation(q: ca.MX, v: ca.MX) -> ca.MX:
+    """Rotate a vector [vx,vy,vz,0] by a quaternion [qx,qy,qz,qw]."""
+    p = ca.vertcat(v, 0)
+    q_inv = quaternion_inverse(q)
+    q_p = quaternion_product(p, q_inv)
+    p_rot = quaternion_product(q, q_p)
+    return p_rot[:-1]
 
 
 def quaternion_product(q: ca.MX, r: ca.MX) -> ca.MX:
@@ -34,8 +57,13 @@ def quaternion_product(q: ca.MX, r: ca.MX) -> ca.MX:
     )
 
 
+def quaternion_norm(q: ca.MX) -> ca.MX:
+    """Compute the norm of a quaternion."""
+    return ca.sqrt(ca.dot(q, q))
+
+
 def quaternion_to_rotation_matrix(q: ca.MX) -> ca.MX:
-    """Convert a quaternion [qx, qy, qz, qw] to a rotation matrix."""
+    """Create a rotation matrix from a quaternion [qx, qy, qz, qw]."""
     qx, qy, qz, qw = q[0], q[1], q[2], q[3]
     R = ca.MX(3, 3)
     R[0, 0] = 1 - 2 * (qy**2 + qz**2)
@@ -50,8 +78,26 @@ def quaternion_to_rotation_matrix(q: ca.MX) -> ca.MX:
     return R
 
 
+def euler_to_quaternion(rpy: ca.MX) -> ca.MX:
+    """Convert Euler angles [roll, pitch, yaw] to a quaternion [qx, qy, qz, qw]."""
+    roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
+    cy = ca.cos(yaw * 0.5)
+    sy = ca.sin(yaw * 0.5)
+    cp = ca.cos(pitch * 0.5)
+    sp = ca.sin(pitch * 0.5)
+    cr = ca.cos(roll * 0.5)
+    sr = ca.sin(roll * 0.5)
+
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+
+    return ca.vertcat(qx, qy, qz, qw)
+
+
 def quaternion_to_euler(quat: ca.MX) -> ca.MX:
-    """Convert a quaternion [qx, qy, qz, qw] to Euler angles [roll, pitch, yaw]."""
+    """(Symbolical) Convert a quaternion [qx, qy, qz, qw] to Euler angles [roll, pitch, yaw]."""
     qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
 
     # Roll (x-axis rotation)
@@ -114,42 +160,25 @@ def R_body_to_inertial(rpy: Union[np.ndarray, ca.SX]) -> Union[np.ndarray, ca.SX
     return Rm.T  # Transpose the matrix to convert from body to inertial frame
 
 
-def Rbi(phi: ca.MX, theta: ca.MX, psi: ca.MX) -> ca.MX:
+def Rbi(rpy: ca.MX) -> ca.MX:
     """Create a rotation matrix from euler angles.
 
     This represents the extrinsic X-Y-Z (or quivalently the intrinsic Z-Y-X (3-2-1)) euler angle
     rotation.
 
     Args:
-        phi: roll (or rotation about X).
-        theta: pitch (or rotation about Y).
-        psi: yaw (or rotation about Z).
+        rpy: Roll, pitch, yaw angles.
 
     Returns:
         R: casadi Rotation matrix
     """
+    phi, theta, psi = rpy[0], rpy[1], rpy[2]
     rx = ca.blockcat([[1, 0, 0], [0, ca.cos(phi), -ca.sin(phi)], [0, ca.sin(phi), ca.cos(phi)]])
     ry = ca.blockcat(
         [[ca.cos(theta), 0, ca.sin(theta)], [0, 1, 0], [-ca.sin(theta), 0, ca.cos(theta)]]
     )
     rz = ca.blockcat([[ca.cos(psi), -ca.sin(psi), 0], [ca.sin(psi), ca.cos(psi), 0], [0, 0, 1]])
     return rz @ ry @ rx
-
-
-def rpm_to_thrust(ct, rpm1, rpm2, rpm3, rpm4):
-    """Compute the thrust from the rotor rates.
-
-    Args:
-        ct (float): Thrust coefficient.
-        rpm1 (float): Rotor rate 1.
-        rpm2 (float): Rotor rate 2.
-        rpm3 (float): Rotor rate 3.
-        rpm4 (float): Rotor rate 4.
-
-    Returns:
-        float: Total thrust.
-    """
-    return ct * (rpm1 + rpm2 + rpm3 + rpm4)
 
 
 def rpm_to_torques_mat(c_tau_xy: float, cd: float) -> np.ndarray:
@@ -163,9 +192,9 @@ def rpm_to_torques_mat(c_tau_xy: float, cd: float) -> np.ndarray:
     )
 
 
-def W1(eul_ang: np.ndarray) -> np.ndarray:
+def W1(rpy: np.ndarray) -> np.ndarray:
     """Compute the numpy W1 matrix from euler angles. w = W1 * drpy."""
-    phi, theta = eul_ang[0], eul_ang[1]
+    phi, theta = rpy[0], rpy[1]
     return np.array(
         [
             [1, 0, -np.sin(theta)],
@@ -175,9 +204,23 @@ def W1(eul_ang: np.ndarray) -> np.ndarray:
     )
 
 
-def W2(eul_ang: np.ndarray) -> np.ndarray:
+def W1s(rpy: ca.MX) -> ca.MX:
+    """Compute the symbolic W1 matrix from euler angles."""
+    return ca.vertcat(
+        ca.horzcat(1, 0, -ca.sin(rpy[1])),
+        ca.horzcat(0, ca.cos(rpy[0]), ca.sin(rpy[0]) * ca.cos(rpy[1])),
+        ca.horzcat(0, -ca.sin(rpy[0]), ca.cos(rpy[0]) * ca.cos(rpy[1])),
+    )
+
+
+def dW1s(rpy: ca.MX, drpy: ca.MX) -> ca.MX:
+    """Compute the time derivative of the symbolical W1 matrix."""
+    return W1s(rpy) @ ca.skew(drpy)
+
+
+def W2(rpy: np.ndarray) -> np.ndarray:
     """Compute the W2 matrix from euler angles. drpy = W2 * w."""
-    phi, theta = eul_ang[0], eul_ang[1]
+    phi, theta = rpy[0], rpy[1]
     return np.array(
         [
             [1, np.sin(phi) * np.tan(theta), np.cos(phi) * np.tan(theta)],
@@ -187,39 +230,22 @@ def W2(eul_ang: np.ndarray) -> np.ndarray:
     )
 
 
-def W1s(eul_ang: ca.MX) -> ca.MX:
-    """Compute the symbolic W1 matrix from euler angles."""
+def W2s(rpy: ca.MX) -> ca.MX:
+    """Compute the symbolical W2 matrix from euler angles."""
+    phi, theta = rpy[0], rpy[1]
     return ca.vertcat(
-        ca.horzcat(1, 0, -ca.sin(eul_ang[1])),
-        ca.horzcat(0, ca.cos(eul_ang[0]), ca.sin(eul_ang[0]) * ca.cos(eul_ang[1])),
-        ca.horzcat(0, -ca.sin(eul_ang[0]), ca.cos(eul_ang[0]) * ca.cos(eul_ang[1])),
+        ca.horzcat(1, ca.sin(phi) * ca.tan(theta), ca.cos(phi) * ca.tan(theta)),
+        ca.horzcat(0, ca.cos(phi), -ca.sin(phi)),
+        ca.horzcat(0, ca.sin(phi) / ca.cos(theta), ca.cos(phi) / ca.cos(theta)),
     )
 
 
-def dW1s(eul_ang: ca.MX, deul_ang: ca.MX) -> ca.MX:
-    """Compute the time derivative of the symbolical W1 matrix."""
-    return W1s(eul_ang) @ ca.skew(deul_ang)
-
-
-def W2s(eul_ang: ca.MX) -> ca.MX:
-    """Compute the W2 matrix from euler angles."""
-    return ca.vertcat(
-        ca.horzcat(
-            1, ca.sin(eul_ang[0]) * ca.tan(eul_ang[1]), ca.cos(eul_ang[0]) * ca.tan(eul_ang[1])
-        ),
-        ca.horzcat(0, ca.cos(eul_ang[0]), -ca.sin(eul_ang[0])),
-        ca.horzcat(
-            0, ca.sin(eul_ang[0]) / ca.cos(eul_ang[1]), ca.cos(eul_ang[0]) / ca.cos(eul_ang[1])
-        ),
-    )
-
-
-def dW2s(eul_ang: ca.MX, deul_ang: ca.MX) -> ca.MX:
+def dW2s(rpy: ca.MX, drpy: ca.MX) -> ca.MX:
     """Compute the time derivative of the symbolical W2 matrix."""
-    return W2s(eul_ang) @ ca.skew(deul_ang)
+    return W2s(rpy) @ ca.skew(drpy)
 
 
-def rungeKuttaExpr(x, u, dt, fc) -> ca.MX:
+def rungeKuttaExpr(x: ca.MX, u: ca.MX, dt: float, fc: ca.Function) -> ca.MX:
     """Perform one step of the 4th order Runge-Kutta integration method.
 
     Args:
@@ -239,8 +265,8 @@ def rungeKuttaExpr(x, u, dt, fc) -> ca.MX:
     return xn
 
 
-def rungeKuttaFcn(nx, nu, dt, fc) -> ca.Function:
+def rungeKuttaFcn(nx: int, nu: int, dt: float, fc: ca.Function) -> ca.Function:
     x = ca.MX.sym("x", nx)
     u = ca.MX.sym("u", nu)
     xn = rungeKuttaExpr(x, u, dt, fc)
-    return ca.Function("disc_dyn", [x, u], [xn], ["x", "u"], ["xn"])
+    return ca.Function("fd", [x, u], [xn], ["x", "u"], ["xn"])

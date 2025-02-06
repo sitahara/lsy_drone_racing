@@ -54,17 +54,18 @@ class MPC(BaseController):
         self.gate_times = np.zeros(self.initial_obs["gates_visited"].shape[0])
         self.number_gates_passed = 0
 
+        self.hyperparams = hyperparams
         if hyperparams is not None:
             cost_info["Qs_pos"] = hyperparams.get("Qs_pos", cost_info["Qs_pos"])
             cost_info["Qs_vel"] = hyperparams.get("Qs_vel", cost_info["Qs_vel"])
-            cost_info["Qs_ang"] = hyperparams.get("Qs_ang", cost_info["Qs_ang"])
-            cost_info["Qs_dang"] = hyperparams.get("Qs_dang", cost_info["Qs_dang"])
+            cost_info["Qs_rpy"] = hyperparams.get("Qs_rpy", cost_info["Qs_rpy"])
+            cost_info["Qs_drpy"] = hyperparams.get("Qs_drpy", cost_info["Qs_drpy"])
             cost_info["Qs_quat"] = hyperparams.get("Qs_quat", cost_info["Qs_quat"])
 
             cost_info["Qt_pos"] = hyperparams.get("Qt_pos", cost_info["Qs_pos"])
             cost_info["Qt_vel"] = hyperparams.get("Qt_vel", cost_info["Qs_vel"])
-            cost_info["Qt_ang"] = hyperparams.get("Qt_ang", cost_info["Qs_ang"])
-            cost_info["Qt_dang"] = hyperparams.get("Qt_dang", cost_info["Qs_dang"])
+            cost_info["Qt_rpy"] = hyperparams.get("Qt_rpy", cost_info["Qs_rpy"])
+            cost_info["Qt_drpy"] = hyperparams.get("Qt_drpy", cost_info["Qs_drpy"])
             cost_info["Qt_quat"] = hyperparams.get("Qt_quat", cost_info["Qs_quat"])
 
             cost_info["Rs"] = hyperparams.get("Rs", cost_info["Rs"])
@@ -170,12 +171,21 @@ class MPC(BaseController):
         # print(f"Error: {self.tot_error * self.ts}")
         if len(info["collisions"]) > 0:
             self.collided = True
-            self.gate_times[self.target_gate :] = 1e9
+            self.gate_times[self.target_gate :] = 30
+
+        # planned_pos = self.opt.x_last[self.dynamics.state_indices["pos"], :]
+        # self.plotInPyBullet(planned_pos.T, lifetime=1, color=[0, 1, 0])
 
     def episode_callback(self):
         # print("Episode finished")
         # print(f"Reported error: {self.tot_error * self.ts}")
-        return self.tot_error * self.ts, self.collided, self.gate_times, self.number_gates_passed
+        if self.hyperparams is not None:
+            return (
+                self.tot_error * 1000 * self.ts / self.n_step,
+                self.collided,
+                self.gate_times,
+                self.number_gates_passed,
+            )
 
     def calculate_initial_guess(self):
         self.obs = self.initial_obs
@@ -188,7 +198,7 @@ class MPC(BaseController):
         self.opt.u_guess = self.ipopt.u_guess
         self.n_step = 0
 
-    def set_target_trajectory(self, t_total: float = 9) -> None:
+    def set_target_trajectory(self, t_total: float = 7) -> None:
         """Set the target trajectory for the MPC controller."""
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
@@ -213,19 +223,8 @@ class MPC(BaseController):
 
         t_vis = np.linspace(0, t_total - 1, 100)
         spline_points = self.target_trajectory(t_vis)
-        try:
-            # Plot the spline as a line in PyBullet
-            for i in range(len(spline_points) - 1):
-                p.addUserDebugLine(
-                    spline_points[i],
-                    spline_points[i + 1],
-                    lineColorRGB=[1, 0, 0],  # Red color
-                    lineWidth=2,
-                    lifeTime=0,  # 0 means the line persists indefinitely
-                    physicsClientId=0,
-                )
-        except p.error:
-            ...  # Ignore errors if PyBullet is not available
+        self.plotInPyBullet(spline_points, lifetime=0)
+
         return None
 
     def updateTargetTrajectory(self):
@@ -244,10 +243,26 @@ class MPC(BaseController):
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
         self.x_ref[:3, :] = (
-            pos_des  # np.tile(np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1))  # pos_des
+            pos_des  # np.tile( np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1) )  # pos_des
         )
         self.n_step += 1
         return None
+
+    def plotInPyBullet(self, points, lifetime=0, color=[1, 0, 0]):
+        """Plot the desired state in PyBullet."""
+        try:
+            # Plot the spline as a line in PyBullet
+            for i in range(len(points) - 1):
+                p.addUserDebugLine(
+                    points[i],
+                    points[i + 1],
+                    lineColorRGB=color,  # Red color
+                    lineWidth=2,
+                    lifeTime=lifetime,  # 0 means the line persists indefinitely
+                    physicsClientId=0,
+                )
+        except p.error:
+            ...  # Ignore errors if PyBullet is not available
 
     # def setupCostFunction(self, cost_info: dict) -> None:
     #     """Setup the cost function for the MPC controller."""
@@ -260,7 +275,7 @@ class MPC(BaseController):
     #                 cost_info["Qs_pos"],
     #                 cost_info["Qs_vel"],
     #                 cost_info["Qs_quat"],
-    #                 cost_info["Qs_dang"],
+    #                 cost_info["Qs_drpy"],
     #             ]
     #         )
     #         cost_info["Qt"] = np.concatenate(
@@ -268,7 +283,7 @@ class MPC(BaseController):
     #                 cost_info["Qt_pos"],
     #                 cost_info["Qt_vel"],
     #                 cost_info["Qt_quat"],
-    #                 cost_info["Qt_dang"],
+    #                 cost_info["Qt_drpy"],
     #             ]
     #         )
     #     else:
@@ -276,16 +291,16 @@ class MPC(BaseController):
     #             [
     #                 cost_info["Qs_pos"],
     #                 cost_info["Qs_vel"],
-    #                 cost_info["Qs_ang"],
-    #                 cost_info["Qs_dang"],
+    #                 cost_info["Qs_rpy"],
+    #                 cost_info["Qs_drpy"],
     #             ]
     #         )
     #         cost_info["Qt"] = np.concatenate(
     #             [
     #                 cost_info["Qt_pos"],
     #                 cost_info["Qt_vel"],
-    #                 cost_info["Qt_ang"],
-    #                 cost_info["Qt_dang"],
+    #                 cost_info["Qt_rpy"],
+    #                 cost_info["Qt_drpy"],
     #             ]
     #         )
     #     if self.dynamics.useControlRates:
@@ -316,8 +331,8 @@ class MPC(BaseController):
     #     costs["cost_type"] = "External"
     #     costs["Qs_pos"] = np.diag(cost_info["Qs_pos"])
     #     costs["Qs_vel"] = np.diag(cost_info["Qs_vel"])
-    #     costs["Qs_ang"] = np.diag(cost_info["Qs_ang"])
-    #     costs["Qs_dang"] = np.diag(cost_info["Qs_dang"])
+    #     costs["Qs_rpy"] = np.diag(cost_info["Qs_rpy"])
+    #     costs["Qs_drpy"] = np.diag(cost_info["Qs_drpy"])
     #     costs["R"] = np.diag(cost_info["Rs"])
     #     costs["Q_time"] = cost_info["Q_time"]
     #     costs["Q_gate"] = cost_info["Q_gate"]
@@ -328,11 +343,11 @@ class MPC(BaseController):
     #     vel = x[3:6]
     #     cost_vel = ca.mtimes([vel.T, self.costs["Qs_vel"], vel])
 
-    #     ang = x[6:9]
-    #     cost_ang = ca.mtimes([ang.T, self.costs["Qs_ang"], ang])
+    #     rpy = x[6:9]
+    #     cost_rpy = ca.mtimes([rpy.T, self.costs["Qs_rpy"], rpy])
 
-    #     dang = x[9:12]
-    #     cost_dang = ca.mtimes([dang.T, self.costs["Qs_dang"], dang])
+    #     drpy = x[9:12]
+    #     cost_drpy = ca.mtimes([drpy.T, self.costs["Qs_drpy"], drpy])
 
     #     t = x[self.dynamics.state_indices["time"]]
     #     cost_time = t * self.costs["Q_time"] * t
@@ -347,4 +362,4 @@ class MPC(BaseController):
     #     )
     #     cost_gate = ca.mtimes([err.T, self.costs["Q_gate"], err])
 
-    #     return cost_gate + cost_vel + cost_ang + cost_dang + cost_u + cost_time
+    #     return cost_gate + cost_vel + cost_rpy + cost_drpy + cost_u + cost_time

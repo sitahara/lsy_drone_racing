@@ -13,6 +13,7 @@ from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
 from lsy_drone_racing.mpc_utils.dynamics import DroneDynamics
+from lsy_drone_racing.mpc_utils.models import ResidualPytorchModel, GpPytorchModel
 
 from .optimizer import BaseOptimizer
 
@@ -21,6 +22,7 @@ class AcadosOptimizer(BaseOptimizer):
     def __init__(self, dynamics: DroneDynamics, solver_options, optimizer_info):
         super().__init__(dynamics, solver_options, optimizer_info)
         self.useGP = self.optimizer_info.get("useGP", False)
+        self.useGPPytorch = self.optimizer_info.get("useGPPytorch", True)
         self.useZoro = self.optimizer_info.get("useZoro", False)
         self.json_file = self.optimizer_info.get("json_file", "acados_ocp.json")
         self.export_dir = self.optimizer_info.get("export_dir", "generated_code/mpc_acados")
@@ -115,29 +117,31 @@ class AcadosOptimizer(BaseOptimizer):
             raise NotImplementedError("cost_type must be linear, nonlinear, or external.")
 
         # Set Basic bounds
+        # Set control bounds
         ocp.constraints.idxbu = np.arange(self.nu)
         ocp.constraints.lbu = self.dynamics.u_lb
         ocp.constraints.ubu = self.dynamics.u_ub
-
+        # Set state bounds
         ocp.constraints.idxbx = np.arange(self.nx)
         ocp.constraints.lbx = self.dynamics.x_lb
         ocp.constraints.ubx = self.dynamics.x_ub
-
+        # Set start state bounds
         ocp.constraints.idxbx_0 = ocp.constraints.idxbx
         ocp.constraints.lbx_0 = ocp.constraints.lbx
         ocp.constraints.ubx_0 = ocp.constraints.ubx
-
+        # Set terminal state bounds
         ocp.constraints.idxbx_e = ocp.constraints.idxbx
         ocp.constraints.lbx_e = ocp.constraints.lbx
         ocp.constraints.ubx_e = ocp.constraints.ubx
+
         # Set soft constraints
         if self.useSoftConstraints:
-            # Define the penalty matrices Zl and Zu
+            # Define the penalty matrices Zl and Zu (we use the same for all states and controls)
             norm2_penalty = self.softPenalty
             norm1_penalty = self.softPenalty
             # upperSlackBounds are 1 by default, optimize if needed
 
-            # Define slack variables
+            # Define slack variables and limits
             ocp.constraints.idxsbx = self.dynamics.slackStates
             nsx = len(ocp.constraints.idxsbx)
             ocp.constraints.lsbx = np.zeros((nsx,))
@@ -151,7 +155,7 @@ class AcadosOptimizer(BaseOptimizer):
             nsu = len(ocp.constraints.idxsbu)
             ocp.constraints.lsbu = np.zeros((nsu,))
             ocp.constraints.usbu = np.ones((nsu,))
-
+            # Define the soft constraints weights
             nsy = nsx + nsu
             ocp.cost.Zl = norm2_penalty * np.ones((nsy,))
             ocp.cost.Zu = norm2_penalty * np.ones((nsy,))
@@ -167,28 +171,45 @@ class AcadosOptimizer(BaseOptimizer):
             ocp.cost.Zu_0 = norm2_penalty * np.ones((nsu,))
             ocp.cost.zl_0 = norm1_penalty * np.ones((nsu,))
             ocp.cost.zu_0 = norm1_penalty * np.ones((nsu,))
+
         # Set initial state (not required and should not be set for moving horizon estimation)
         # ocp.constraints.x0 = self.x0
-        # Set nonlinear constraints
-        ocp.model.con_h_expr = self.dynamics.nl_constr
-        ocp.constraints.lh = self.dynamics.nl_constr_lh
-        ocp.constraints.uh = self.dynamics.nl_constr_uh
+
+        # Set nonlinear constraints (taken from the dynamics)
+        if self.dynamics.nl_constr is not None:
+            ocp.model.con_h_expr = self.dynamics.nl_constr
+            ocp.constraints.lh = self.dynamics.nl_constr_lh
+            ocp.constraints.uh = self.dynamics.nl_constr_uh
+
+        # Initialize the parameters (if any)
         if self.dynamics.param_values is not None:
             ocp.parameter_values = self.dynamics.param_values
 
         if self.useZoro:
             raise NotImplementedError("Zoro not implemented yet.")
+
         ocp.code_export_directory = self.export_dir
         self.ocp = ocp
         if self.useGP:
-            raise NotImplementedError("Gaussian Process not implemented yet.")
-            self.residual_model = l4a.PytorchResidualModel(self.pytorch_model)
-            self.ocp_solver = l4a.ResidualLearningMPC(
-                ocp=self.ocp, residual_model=self.residual_model, use_cython=True
-            )
+            raise NotImplementedError("GP not implemented yet.")
+            # if self.useGPPytorch:
+            #     self.pytorch_model = l4a.models.GPyTorchResidualModel
+            #     self.pytorch_model = GpPytorchModel()
+            #     self.residual_model = l4a.models.GPyTorchResidualModel(self.pytorch_model,)
+            #     self.ocp_solver = l4a.controllers.ZeroOrderGPMPC(
+            #         ocp=self.ocp, residual_model=self.residual_model
+            #     )
+            # else:
+            #     self.pytorch_model = ResidualPytorchModel(
+            #         state_dim=self.nx, control_dim=self.nu, hidden_dim=128
+            #     )
+            #     self.residual_model = l4a.models.PyTorchResidualModel(self.pytorch_model)
+            #     self.ocp_solver = l4a.controllers.ResidualLearningMPC(
+            #         ocp=self.ocp, residual_model=self.residual_model, use_cython=True
+            #     )
         else:
             self.ocp_solver = AcadosOcpSolver(self.ocp, self.json_file)
-        # self.ocp_integrator = AcadosSimSolver(self.ocp)
+            self.ocp_integrator = AcadosSimSolver(self.ocp)
 
     def step(
         self,
@@ -198,15 +219,16 @@ class AcadosOptimizer(BaseOptimizer):
         u_ref: NDArray[np.floating] = None,
     ) -> NDArray[np.floating]:
         """Performs one optimization step using the current state, reference trajectory, and the previous solution for warmstarting. Updates the previous solution and returns the control input."""
-        # Transform the state and update the parameters
+        # Map the observations onto dynamic states (includes Unscented Kalman Filter) the state
         current_state = self.dynamics.transformState(current_state)
+        # Update the solver parameters
         self.updateParameters(obs)
 
         # Set initial state
         self.ocp_solver.set(0, "lbx", current_state)
         self.ocp_solver.set(0, "ubx", current_state)
 
-        # Set reference trajectory
+        # Set reference trajectory for linear and nonlinear LS cost functions
         if self.dynamics.cost_type != "external":
             y_ref = np.vstack([x_ref[:, :-1], u_ref])
             y_ref_e = x_ref[:, -1]
@@ -237,9 +259,10 @@ class AcadosOptimizer(BaseOptimizer):
 
         if status not in [0, 2]:
             self.ocp_solver.print_statistics()
-            raise Exception(f"acados failed with status {status}. Exiting.")
+            # raise Warning(f"acados failed with status {status}. Exiting.")
         else:
-            print(f"acados succeded with status {status}.")
+            pass
+            # print(f"acados succeded with status {status}.")
 
         # Update previous solution
         self.x_last = np.zeros((self.nx, self.n_horizon + 1))
@@ -253,13 +276,13 @@ class AcadosOptimizer(BaseOptimizer):
         self.x_guess[:, :-1] = self.x_last[:, 1:]
         self.u_guess[:, :-1] = self.u_last[:, 1:]
 
-        # Extract the control input
+        # Extract the control input (depends on the dynamics and interface)
         action = self.dynamics.transformAction(self.x_last, self.u_last)
         self.last_action = action
         return action
 
     def updateParameters(self, obs):
-        """Update the obstacle constraints based on the current obstacle positions."""
+        """Update the parameters of the acados solver. Here we call the dynamics.updateParameters function to get the new values."""
         update = self.dynamics.updateParameters(obs)
 
         if update:

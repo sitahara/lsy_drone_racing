@@ -148,13 +148,13 @@ class MPCCppDynamics(DroneDynamics):
         # Extract the position, velocity, euler angles, and angular velocities
         pos = x[:3]
         vel = x[3:6]
-        eul_ang = x[6:9]
-        deul_ang = x[9:12]
+        rpy = x[6:9]
+        drpy = x[9:12]
         progress, dprogress = self.pathPlanner.computeProgress(pos, vel)
 
         # Convert to used states
-        w = W1(eul_ang) @ deul_ang
-        quat = Rot.from_euler("xyz", eul_ang).as_quat()
+        w = W1(rpy) @ drpy
+        quat = Rot.from_euler("xyz", rpy).as_quat()
 
         if self.last_u is None:
             self.last_u = np.zeros((5,))
