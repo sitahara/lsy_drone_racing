@@ -1,9 +1,9 @@
 [dynamics_info]
-interface = "Mellinger" # "Mellinger", "Thrust"
+interface = "Thrust" # "Mellinger", "Thrust"
 ts = 0.016666
 n_horizon = 60
 controlType = "Thrusts" # "Thrusts", "Torques", "RPMs"
-dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
+dynamicsType= "system_id" # "Quaternion", "Euler", "MPCC", "system_id"
 useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics

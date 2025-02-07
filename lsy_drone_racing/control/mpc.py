@@ -30,7 +30,7 @@ class MPC(BaseController):
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
         hyperparams: dict = None,
-        print_info: bool = False,
+        print_info: bool = True,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
