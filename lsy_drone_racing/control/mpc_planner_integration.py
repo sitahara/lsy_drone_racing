@@ -17,7 +17,7 @@ from lsy_drone_racing.mpc_utils import (
     IPOPTOptimizer,
     MPCCppDynamics,
 )
-from lsy_drone_racing.planner import ObservationManager, Planner
+from lsy_drone_racing.planner import Planner
 
 
 class MPC(BaseController):
@@ -28,7 +28,7 @@ class MPC(BaseController):
         initial_obs: NDArray[np.floating],
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
-        visualize: bool = True,
+        visualize: bool = False,
         separate_thread: bool = False,
         hyperparams: dict = None,
         print_info: bool = False,
@@ -108,8 +108,6 @@ class MPC(BaseController):
 
         self.visualize = visualize
         self.separate_thread = separate_thread
-        # Use ObservationManager to record true coordinates
-        self.ObsMgr = ObservationManager()
 
         # Set up the planner
         # Since the planner is slow, run the planner on a separate thread
@@ -178,7 +176,7 @@ class MPC(BaseController):
         Returns:
             The action either for the thrust or mellinger interface.
         """
-        # self.obs = self.ObsMgr.update(obs)
+        self.obs = obs  # Update internal observation
         self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]])
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
         self.updateTargetTrajectory()

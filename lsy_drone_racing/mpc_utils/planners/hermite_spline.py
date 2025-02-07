@@ -145,8 +145,8 @@ class HermiteSpline:
         self.fitPolynomial()
         self.fitHermiteSpline()
 
-    def getPathPointsForPlotting(self):
-        theta_values = np.linspace(0, 1, 1000)
+    def getPathPointsForPlotting(self, theta_0=0, theta_end=1, num_points=1000):
+        theta_values = np.linspace(theta_0, theta_end, num_points)
         points = np.array([self.path_function(t).full().flatten() for t in theta_values])
         dpoints = np.array([self.dpath_function(t).full().flatten() for t in theta_values])
         return points, dpoints
@@ -178,10 +178,10 @@ class HermiteSpline:
         dprogress = np.dot(tangent, vel) / np.linalg.norm(tangent)
         return progress, dprogress
 
-    def fitPolynomial(self):
+    def fitPolynomial(self, t_total=1):
         waypoints = self.waypoints
         degree = waypoints.shape[0] - 1
-        t_waypoints = np.linspace(0, 1, waypoints.shape[0])
+        t_waypoints = np.linspace(0, t_total, waypoints.shape[0])
 
         poly_coeffs_x = np.polyfit(t_waypoints, waypoints[:, 0], degree)
         poly_coeffs_y = np.polyfit(t_waypoints, waypoints[:, 1], degree)
@@ -215,6 +215,10 @@ class HermiteSpline:
         if self.debug:
             print("Arc lengths of each spline segment", arc_lengths)
             print("Progress values at which segments switch", self.theta_switch)
+
+        self.poly_x = poly_x
+        self.poly_y = poly_y
+        self.poly_z = poly_z
         return None
 
     def fitHermiteSpline(self):

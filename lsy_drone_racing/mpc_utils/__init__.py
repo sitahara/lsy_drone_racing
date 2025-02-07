@@ -1,7 +1,7 @@
 from .dynamics import DroneDynamics, MPCCppDynamics
 from .optimizers import AcadosOptimizer, IPOPTOptimizer
 from .utils import *
-from .planners import PolynomialPlanner
+from .planners import PolynomialPlanner, HermiteSpline
 
 __all__ = [
     "IPOPTOptimizer",
@@ -9,4 +9,5 @@ __all__ = [
     "DroneDynamics",
     "MPCCppDynamics",
     "PolynomialPlanner",
+    "HermiteSpline",
 ]

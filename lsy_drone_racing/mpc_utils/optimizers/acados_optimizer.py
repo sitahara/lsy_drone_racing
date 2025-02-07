@@ -249,10 +249,20 @@ class AcadosOptimizer(BaseOptimizer):
 
         # Set initial guess (u_guess/x_guess are the previous solution moved one step forward)
         self.ocp_solver.set(0, "x", current_state)
+        if self.x_guess is None:
+            Warning("No initial state guess provided. Using the default.")
+            self.x_guess = np.tile(current_state, (1, self.n_horizon + 1))
+            if x_ref is not None:
+                self.x_guess[: x_ref.shape[0], 1:] = x_ref
+        if self.u_guess is None:
+            Warning("No initial control guess provided. Using the default.")
+            self.u_guess = np.tile(self.dynamics.u_eq, (1, self.n_horizon))
+            if u_ref is not None:
+                self.u_guess[: u_ref.shape[0], :] = u_ref
+
         for k in range(self.n_horizon):
             self.ocp_solver.set(k + 1, "x", self.x_guess[:, k + 1])
             self.ocp_solver.set(k, "u", self.u_guess[:, k])
-
         # Solve the OCP
         if self.ocp.solver_options.nlp_solver_type == "SQP_RTI":
             # phase 1

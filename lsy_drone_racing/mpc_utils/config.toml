@@ -7,6 +7,8 @@ dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
 useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
+reference = "hermite_spline" # "spline", "polynomial", # which type of reference trajectory to use
+start_controller = false # Whether to use a start controller until a certain height has been reached
 [dynamics_info.ukf_info]
 useUKF=false
 measurement_noise=0.01 # std

@@ -17,6 +17,7 @@ from lsy_drone_racing.mpc_utils import (
     IPOPTOptimizer,
     MPCCppDynamics,
     PolynomialPlanner,
+    HermiteSpline,
 )
 
 
@@ -40,6 +41,8 @@ class MPC(BaseController):
         dynamics_info = config["dynamics_info"]
         self.ts = dynamics_info["ts"]
         self.n_horizon = dynamics_info["n_horizon"]
+        self.reference = dynamics_info["reference"]
+        self.useStartController = dynamics_info["start_controller"]
 
         optimizer_info = config["optimizer_info"]
         solver_options = config["solver_options"]
@@ -104,17 +107,6 @@ class MPC(BaseController):
         self.opt = AcadosOptimizer(
             dynamics=self.dynamics, solver_options=solver_options, optimizer_info=optimizer_info
         )
-        # theta = ca.SX.sym("theta")
-        # self.planner = PolynomialPlanner(
-        #     theta,
-        #     initial_obs["pos"],
-        #     initial_obs["rpy"],
-        #     initial_obs["gates_pos"],
-        #     initial_obs["gates_rpy"],
-        #     self.ts,
-        #     self.n_horizon,
-        #     desired_time=7.0,
-        # )
         self.set_target_trajectory()
 
         self.calculate_initial_guess()
@@ -135,23 +127,32 @@ class MPC(BaseController):
         self.obs = obs
         self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]])
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
-        self.updateTargetTrajectory()
-        start_time = time.time()
-        if self.opt is None:
-            action = self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
-        else:
-            action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"Control signal update time: {elapsed_time:.5f} seconds")
-        # print(f"Current position: {self.current_state[:3]}")
-        if self.print_info:
-            print(f"Desired position: {self.x_ref[:3, 1]}")
+        if self.useStartController and obs["pos"][-1] <= 0.2:
             if self.dynamics.interface == "Mellinger":
-                print(f"Next position: {action[:3]}")
-                action[6:9] = np.zeros(3)
-            elif self.dynamics.interface == "Thrust":
-                print(f"Total Thrust:", action[0], "Desired RPY:", action[1:])
+                action = np.zeros((13,))
+                action[:3] = self.initial_obs["pos"]
+                action[2] = 0.2
+            else:
+                action = np.zeros((4, 1))
+                action[0] = self.dynamics.mass * self.dynamics.g * 1.5
+        else:
+            self.updateTargetTrajectory()
+            start_time = time.time()
+            if self.opt is None:
+                action = self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
+            else:
+                action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f"Control signal update time: {elapsed_time:.5f} seconds")
+            # print(f"Current position: {self.current_state[:3]}")
+            if self.print_info:
+                print(f"Desired position: {self.x_ref[:3, 1]}")
+                if self.dynamics.interface == "Mellinger":
+                    print(f"Next position: {action[:3]}")
+                    action[6:9] = np.zeros(3)
+                elif self.dynamics.interface == "Thrust":
+                    print("Total Thrust:", action[0], "Desired RPY:", action[1:])
 
         return action.flatten()
 
@@ -212,32 +213,75 @@ class MPC(BaseController):
         self.opt.u_guess = self.ipopt.u_guess
         self.n_step = 0
 
-    def set_target_trajectory(self, t_total: float = 7) -> None:
+    def set_target_trajectory(self, t_total: float = 15) -> None:
         """Set the target trajectory for the MPC controller."""
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
-        waypoints = np.array(
-            [
-                [1.0, 1.0, 0.05],
-                [0.8, 0.5, 0.2],
-                [0.55, -0.8, 0.4],
-                [0.2, -1.8, 0.65],
-                [1.1, -1.35, 1.0],
-                [0.2, 0.0, 0.65],
-                [0.0, 0.75, 0.525],
-                [0.0, 0.75, 1.1],
-                [-0.5, -0.5, 1.1],
-                [-0.5, -1.0, 1.1],
-            ]
-        )
-        # self.t_total = t_total
-        t = np.linspace(0, t_total, len(waypoints))
-        self.target_trajectory = CubicSpline(t, waypoints)
-        # Generate points along the spline for visualization
+        if self.reference != "spline":
+            self.pathPlanner = HermiteSpline(
+                start_pos=self.initial_obs["pos"],
+                start_rpy=self.initial_obs["rpy"],
+                gates_pos=self.initial_obs["gates_pos"],
+                gates_rpy=self.initial_obs["gates_rpy"],
+            )
+            num_points = int(t_total / self.ts)
+            if self.reference == "hermite_spline":
 
-        t_vis = np.linspace(0, t_total - 1, 100)
-        spline_points = self.target_trajectory(t_vis)
-        self.plotInPyBullet(spline_points, lifetime=0)
+                def target_trajectory(t):
+                    if isinstance(t, np.ndarray):
+                        theta_0 = t[0] / self.t_total
+                        theta_end = t[-1] / self.t_total
+                        if theta_end > 1:
+                            theta_end = 1
+                        arr, _ = self.pathPlanner.getPathPointsForPlotting(
+                            theta_0=theta_0, theta_end=theta_end, num_points=len(t)
+                        )
+                    else:
+                        theta_0 = t / self.t_total
+                        theta_end = t / self.t_total
+                        arr, _ = self.pathPlanner.getPathPointsForPlotting(
+                            theta_0=theta_0, theta_end=theta_end, num_points=1
+                        )
+
+                    return arr
+
+            if self.reference == "polynomial":
+                self.pathPlanner.fitPolynomial(t_total=t_total)
+
+                def target_trajectory(t):
+                    arr = np.zeros((len(t), 3))
+                    arr[:, 0] = self.pathPlanner.poly_x(t)
+                    arr[:, 1] = self.pathPlanner.poly_y(t)
+                    arr[:, 2] = self.pathPlanner.poly_z(t)
+                    return arr
+
+            self.target_trajectory = target_trajectory
+            t = np.linspace(0, t_total, num_points)
+            spline_points = self.target_trajectory(t)
+            self.plotInPyBullet(spline_points, lifetime=0)
+        else:
+            waypoints = np.array(
+                [
+                    [1.0, 1.0, 0.05],
+                    [0.8, 0.5, 0.2],
+                    [0.55, -0.8, 0.4],
+                    [0.2, -1.8, 0.65],
+                    [1.1, -1.35, 1.0],
+                    [0.2, 0.0, 0.65],
+                    [0.0, 0.75, 0.525],
+                    [0.0, 0.75, 1.1],
+                    [-0.5, -0.5, 1.1],
+                    [-0.5, -1.0, 1.1],
+                ]
+            )
+            # self.t_total = t_total
+            t = np.linspace(0, t_total, len(waypoints))
+            self.target_trajectory = CubicSpline(t, waypoints)
+            # Generate points along the spline for visualization
+
+            t_vis = np.linspace(0, t_total - 1, 100)
+            spline_points = self.target_trajectory(t_vis)
+            self.plotInPyBullet(spline_points, lifetime=0)
 
         return None
 
