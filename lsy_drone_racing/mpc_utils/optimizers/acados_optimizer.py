@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import casadi as ca
-import l4acados as l4a
+# import l4acados as l4a
 import numpy as np
 import scipy
 from acados_template import (
@@ -14,7 +16,7 @@ from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
 from lsy_drone_racing.mpc_utils.dynamics import DroneDynamics
-from lsy_drone_racing.mpc_utils.models import ResidualPytorchModel, GpPytorchModel
+# from lsy_drone_racing.mpc_utils.models import ResidualPytorchModel, GpPytorchModel
 
 from .optimizer import BaseOptimizer
 

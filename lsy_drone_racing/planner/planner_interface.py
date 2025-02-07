@@ -136,7 +136,7 @@ class Planner:
                        [gate_y[i] - line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))] +\
                        [gate_y[i] + 1.5* line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))] +\
                        [gate_y[i] - 1.5* line_length * np.sin(gate_yaw[i]) for i in range(len(gate_x))]
-        obs_diameter = [(i%2!=0)*0.35+(i%2==0)*0.15 for i in range(len(ob_x))] +\
+        obs_diameter = [(i%2!=0)*0.4+(i%2==0)*0.15 for i in range(len(ob_x))] +\
                        [0.1 * expand_rate for _ in range(len(gate_x)*4)]
 
 
@@ -215,15 +215,15 @@ class Planner:
             real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], (gate_z[0]+gate_z[1])/2, gate_z[1], gate_z[1]]
         elif next_gate == 2:
             real_wp_x = [
-                gate_x[0],
-                gate_x[0] + 0.65 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_x[0] - 0.1 * np.cos(gate_yaw[1]),
+                gate_x[0] + 0.8 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7),
                 gate_x[1],
                 gate_x[1] - 0.0 * np.cos(gate_yaw[1]) + 0.1 * np.cos(gate_yaw[1] + np.pi / 2),
                 gate_x[2],
                 gate_x[2] + 0.05 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6),]
             real_wp_y = [
-                gate_y[0],
-                gate_y[0] + 0.65 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_y[0] - 0.1 * np.sin(gate_yaw[1]),
+                gate_y[0] + 0.8 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7),
                 gate_y[1],
                 gate_y[1] - 0.0 * np.sin(gate_yaw[1]) + 0.1 * np.sin(gate_yaw[1] + np.pi / 2),
                 gate_y[2],
@@ -239,7 +239,7 @@ class Planner:
             real_wp_x = [
                 gate_x[1] + 0.1 * np.cos(gate_yaw[1]),
                 gate_x[1] + 0.1 * np.cos(gate_yaw[1] + np.pi / 2 - 0.2),
-                gate_x[2] + 0.1 * np.cos(gate_yaw[2]) + 0.05 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6),
+                gate_x[2] + 0.01 * np.cos(gate_yaw[2]) - 0.05 * np.cos(gate_yaw[2] + np.pi / 2),
                 (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2,
                 (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2 - 0.2,
                 (gate_x[2] - 0.58/2 * np.cos(gate_yaw[2]))/2 - 0.4,
@@ -249,7 +249,7 @@ class Planner:
             real_wp_y = [
                 gate_y[1] + 0.1 * np.sin(gate_yaw[1]),
                 gate_y[1] + 0.1 * np.sin(gate_yaw[1] + np.pi / 2 - 0.2),
-                gate_y[2] + 0.1 * np.sin(gate_yaw[2]) + 0.05 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6),
+                gate_y[2] + 0.01 * np.sin(gate_yaw[2]) - 0.05 * np.sin(gate_yaw[2] + np.pi / 2),
                 (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2,
                 (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2 + 0.1,
                 (gate_y[2] - 0.58/2 * np.sin(gate_yaw[2]) + 1)/2 + 0.1,

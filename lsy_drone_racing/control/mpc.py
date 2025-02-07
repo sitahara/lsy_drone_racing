@@ -1,5 +1,7 @@
 """Module for Model Predictive Controller implementation."""
 
+from __future__ import annotations
+
 import time
 
 import casadi as ca
@@ -30,7 +32,7 @@ class MPC(BaseController):
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
         hyperparams: dict = None,
-        print_info: bool = False,
+        print_info: bool = True,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
@@ -57,6 +59,8 @@ class MPC(BaseController):
         self.target_gate = initial_obs["target_gate"]
         self.gate_times = np.zeros(self.initial_obs["gates_visited"].shape[0])
         self.number_gates_passed = 0
+
+        self.control_state = 0 # 0; prep, 1; MPC
 
         self.hyperparams = hyperparams
         if hyperparams is not None:
@@ -109,7 +113,7 @@ class MPC(BaseController):
         )
         self.set_target_trajectory()
 
-        self.calculate_initial_guess()
+        # self.calculate_initial_guess()
 
     def compute_control(
         self, obs: NDArray[np.floating], info: dict | None = None
@@ -127,15 +131,19 @@ class MPC(BaseController):
         self.obs = obs
         self.current_state = np.concatenate([obs["pos"], obs["vel"], obs["rpy"], obs["ang_vel"]])
         # Updates x_ref, the current target trajectory and upcounts the trajectory tick
-        if self.useStartController and obs["pos"][-1] <= 0.2:
+        if self.useStartController and self.control_state == 0:
+            print("prep")
             if self.dynamics.interface == "Mellinger":
                 action = np.zeros((13,))
                 action[:3] = self.initial_obs["pos"]
-                action[2] = 0.2
+                action[2] = 0.05 + (self.n_step * 0.001)
             else:
                 action = np.zeros((4, 1))
                 action[0] = self.dynamics.mass * self.dynamics.g * 1.5
+            if obs["pos"][-1] >= 0.4 :
+                self.control_state = 1
         else:
+            print("MPC")
             self.updateTargetTrajectory()
             start_time = time.time()
             if self.opt is None:
@@ -153,7 +161,7 @@ class MPC(BaseController):
                     action[6:9] = np.zeros(3)
                 elif self.dynamics.interface == "Thrust":
                     print("Total Thrust:", action[0], "Desired RPY:", action[1:])
-
+        print(obs["pos"][-1])
         return action.flatten()
 
     def step_callback(self, action, obs, reward, terminated, truncated, info):
@@ -187,6 +195,8 @@ class MPC(BaseController):
         if len(info["collisions"]) > 0:
             self.collided = True
             self.gate_times[self.target_gate :] = 30
+        
+        self.n_step = self.n_step + 1
 
         # planned_pos = self.opt.x_last[self.dynamics.state_indices["pos"], :]
         # self.plotInPyBullet(planned_pos.T, lifetime=1, color=[0, 1, 0])
@@ -258,7 +268,7 @@ class MPC(BaseController):
             self.target_trajectory = target_trajectory
             t = np.linspace(0, t_total, num_points)
             spline_points = self.target_trajectory(t)
-            self.plotInPyBullet(spline_points, lifetime=0)
+            # self.plotInPyBullet(spline_points, lifetime=0)
         else:
             waypoints = np.array(
                 [

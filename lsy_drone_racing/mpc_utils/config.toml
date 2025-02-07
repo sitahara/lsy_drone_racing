@@ -8,7 +8,7 @@ useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
 reference = "hermite_spline" # "spline", "polynomial", # which type of reference trajectory to use
-start_controller = false # Whether to use a start controller until a certain height has been reached
+start_controller = true # Whether to use a start controller until a certain height has been reached
 [dynamics_info.ukf_info]
 useUKF=false
 measurement_noise=0.01 # std
@@ -17,9 +17,9 @@ process_noise= 0.01 # std
 
 [cost_info] # Optimize through TurBO
 cost_type = "linear"
-Qs_pos = 4 #4
-Qs_vel = 0.05
-Qs_rpy = 0.6
+Qs_pos = 2 #4
+Qs_vel = 1.0
+Qs_rpy = 1.6
 Qs_drpy = 0.1 # 0.05
 Qs_quat = 0.01 #0.1
 Qt_pos = 10

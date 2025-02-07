@@ -35,17 +35,10 @@ class TrajectoryController(BaseController):
         self._tick = 0
         self._freq = initial_info["env_freq"]
 
-        self.DEBUG = True  # Toggles the debug display
-        self.SAMPLE_IDX = 19  # Controls how much farther the desired position will be
+        self.DEBUG = True # Toggles the debug display
+        self.SAMPLE_IDX = 22 # Controls how much farther the desired position will be
 
-        self.planner = Planner(
-            DEBUG=self.DEBUG,
-            USE_QUINTIC_SPLINE=False,
-            MAX_ROAD_WIDTH=0.4,
-            SAFETY_MARGIN=0.1,
-            K_J=0.1,
-            MAX_CURVATURE=100.0,
-        )
+        self.planner = Planner(DEBUG=self.DEBUG, NUM_POINTS=23, USE_QUINTIC_SPLINE=False, MAX_ROAD_WIDTH=0.4, SAFETY_MARGIN=0.1, K_J=0.1, MAX_CURVATURE=100.0)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
@@ -87,26 +80,27 @@ class TrajectoryController(BaseController):
 
         # debug display on pybullet GUI
         if self.DEBUG is True:
-            if self._tick % 10 == 0:
-                for i in range(len(result_path.x) - 1):
-                    p.addUserDebugLine(
-                        [result_path.x[i], result_path.y[i], result_path.z[i]],
-                        [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
-                        lineColorRGB=[1, 0, 0],  # Red color
-                        lineWidth=2,
-                        lifeTime=0,  # 0 means the line persists indefinitely
-                        physicsClientId=0,
-                    )
-            if self._tick % 100 == 0:
-                for i in range(len(ref_path.x_sampled) - 1):
-                    p.addUserDebugLine(
-                        [ref_path.x_sampled[i], ref_path.y_sampled[i], 0.0],
-                        [ref_path.x_sampled[i + 1], ref_path.y_sampled[i + 1], 0.0],
-                        lineColorRGB=[0, 1, 1],  # Red color
-                        lineWidth=2,
-                        lifeTime=0,  # 0 means the line persists indefinitely
-                        physicsClientId=0,
-                    )
+            pass
+        #     if self._tick % 10 == 0:
+        #         for i in range(len(result_path.x) - 1):
+        #             p.addUserDebugLine(
+        #                 [result_path.x[i], result_path.y[i], result_path.z[i]],
+        #                 [result_path.x[i + 1], result_path.y[i + 1], result_path.z[i + 1]],
+        #                 lineColorRGB=[1, 0, 0],  # Red color
+        #                 lineWidth=2,
+        #                 lifeTime=0,  # 0 means the line persists indefinitely
+        #                 physicsClientId=0,
+        #             )
+        #     if self._tick % 100 == 0:
+        #         for i in range(len(ref_path.x_sampled) - 1):
+        #             p.addUserDebugLine(
+        #                 [ref_path.x_sampled[i], ref_path.y_sampled[i], 0.0],
+        #                 [ref_path.x_sampled[i + 1], ref_path.y_sampled[i + 1], 0.0],
+        #                 lineColorRGB=[0, 1, 1],  # Red color
+        #                 lineWidth=2,
+        #                 lifeTime=0,  # 0 means the line persists indefinitely
+        #                 physicsClientId=0,
+        #             )
         return np.concatenate(
             (
                 np.array(

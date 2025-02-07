@@ -101,8 +101,8 @@ high = [0.000001, 0.000001, 0.000001]
 
 [env.randomization.gate_pos]
 type = "uniform"
-low = [0.0, 0.0, 0.0]#[-0.15, -0.15, -0.1]
-high = [0.0, 0.0, 0.0] #[0.15, 0.15, 0.1]
+low = [-0.15, -0.15, -0.1]
+high = [0.15, 0.15, 0.1]
 
 [env.randomization.gate_rpy]
 type = "uniform"
