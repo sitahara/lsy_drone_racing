@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation as Rot
 from filterpy.kalman import UnscentedKalmanFilter as UKF
 from filterpy.kalman import MerweScaledSigmaPoints
 from filterpy.common import Q_discrete_white_noise
-
+from lsy_drone_racing.mpc_utils.planners import HermiteSpline
 from lsy_drone_racing.mpc_utils.utils import (
     W1,
     W2,
@@ -148,9 +148,9 @@ class DroneDynamics(BaseDynamics):
             onlyBaseInit = False
 
         self.controlType = dynamics_info.get("controlType", "Thrusts")
-        if self.controlType not in ["Thrusts", "Torques", "MotorRPMs"]:
+        if self.controlType not in ["Thrusts", "Torques", "RPMs"]:
             raise ValueError(
-                "Currently only Thrusts, Torques, or MotorRPMs are supported. MPCC only uses Thrusts."
+                "Currently only Thrusts, Torques, or RPMs are supported. MPCC only uses Thrusts."
             )
 
         self.useControlRates = dynamics_info.get("useControlRates", False)
@@ -190,7 +190,13 @@ class DroneDynamics(BaseDynamics):
         self.nl_constr_indices = {}
         # Current index of the non-linear constraints
         self.current_nl_constr_index = 0
-
+        # Init the path Planner
+        self.pathPlanner = HermiteSpline(
+            initial_obs["pos"],
+            initial_obs["rpy"],
+            initial_obs["gates_pos"],
+            initial_obs["gates_rpy"],
+        )
         if not onlyBaseInit:
             if self.baseDynamics == "Euler":
                 self.baseEulerDynamics()
@@ -255,7 +261,7 @@ class DroneDynamics(BaseDynamics):
         return x
 
     def transformAction(self, x_sol: np.ndarray, u_sol: np.ndarray) -> np.ndarray:
-        """Transforms optimizer solutions to controller inferfaces (Mellinger or Thrust)."""
+        """Transforms optimizer solutions to controller interfaces (Mellinger or Thrust)."""
 
         if self.useControlRates:
             self.last_u = x_sol[self.state_indices["u"], 1]
@@ -275,11 +281,9 @@ class DroneDynamics(BaseDynamics):
 
             if self.controlType == "Torques":
                 tot_thrust = action[0]
-            elif self.controlType == "MotorRPMs":
+            elif self.controlType == "RPMs":
                 tot_thrust = self.ct * np.sum(action**2)
-                # torques = self.rpmToTorqueMat @ (action**2)
             elif self.controlType == "Thrusts":
-                # torques = self.thrustsToTorques(action)
                 tot_thrust = np.sum(action)
             action = np.concatenate([[tot_thrust], rpy])
             print("Thrust/Euler desired", action)
@@ -363,7 +367,7 @@ class DroneDynamics(BaseDynamics):
 
             u_eq = np.array([self.mass * self.g, 0, 0, 0]).T
             u = ca.vertcat(thrust_total, torques)
-        elif self.controlType == "MotorRPMs":
+        elif self.controlType == "RPMs":
             u = ca.MX.sym("rpm", 4)
             u_eq = np.sqrt((self.mass * self.g / 4) / self.ct) * np.ones((4,))
             f = self.ct * (u**2)
@@ -472,9 +476,9 @@ class DroneDynamics(BaseDynamics):
             thrust_total = ca.MX.sym("tot_thrust", 1)
             u_eq = np.array([self.mass * self.g, 0, 0, 0]).T
             u = ca.vertcat(thrust_total, torques)
-        elif self.controlType == "MotorRPMs":
+        elif self.controlType == "RPMs":
             u = ca.MX.sym("rpm", 4)
-            u_eq = np.sqrt((self.mass * self.g / 4) / self.ct) * np.ones((4,))
+            u_eq = np.sqrt((self.mass * self.g * 0.25) / self.ct) * np.ones((4,))
             f = self.ct * (u**2)
             torques = self.thrustsToTorques_sym(f)
             thrust_total = ca.sum1(f)
@@ -742,11 +746,11 @@ class DroneDynamics(BaseDynamics):
             u_ub = np.array([self.tot_thrust_ub, 1, 1, 1])
             u_lb_rate = np.array([np.sum(self.thrust_rate_lb), -5, -5, -5])
             u_ub_rate = np.array([np.sum(self.thrust_rate_ub), 5, 5, 5])
-        elif self.controlType == "MotorRPMs":
+        elif self.controlType == "RPMs":
             u_lb = self.rpm_lb
             u_ub = self.rpm_ub
-            u_lb_rate = np.sqrt(self.thrust_rate_lb / self.ct)
-            u_ub_rate = np.sqrt(self.thrust_rate_ub / self.ct)
+            u_lb_rate = -self.rpm_lb / 0.1
+            u_ub_rate = self.rpm_ub / 0.1
 
         if self.baseDynamics == "Euler":
             x_lb = np.concatenate([self.pos_lb, self.vel_lb, self.rpy_lb, self.w_lb])

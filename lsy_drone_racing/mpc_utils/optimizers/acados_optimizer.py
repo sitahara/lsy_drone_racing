@@ -6,6 +6,7 @@ from acados_template import (
     AcadosModel,
     AcadosOcp,
     AcadosOcpSolver,
+    AcadosSim,
     AcadosSimSolver,
     ZoroDescription,
 )
@@ -111,7 +112,7 @@ class AcadosOptimizer(BaseOptimizer):
                 ocp.model.x, ocp.model.u, ocp.model.p
             )
             ocp.model.cost_expr_ext_cost_e = self.dynamics.terminalCostFunc(
-                ocp.model.x, np.zeros((self.nu,)), ocp.model.p
+                ocp.model.x, ca.MX.zeros(self.nu), ocp.model.p
             )
         else:
             raise NotImplementedError("cost_type must be linear, nonlinear, or external.")
@@ -208,8 +209,18 @@ class AcadosOptimizer(BaseOptimizer):
             #         ocp=self.ocp, residual_model=self.residual_model, use_cython=True
             #     )
         else:
-            self.ocp_solver = AcadosOcpSolver(self.ocp, self.json_file)
-            self.ocp_integrator = AcadosSimSolver(self.ocp)
+            self.ocp_solver = AcadosOcpSolver(
+                self.ocp,
+                self.json_file,
+                build=self.solver_options.get("acados_build", True),
+                generate=self.solver_options.get("acados_generate", True),
+            )
+            # self.ocp_sim = AcadosSim(self.ocp)
+            self.ocp_integrator = AcadosSimSolver(
+                self.ocp,
+                build=self.solver_options.get("acados_build", True),
+                generate=self.solver_options.get("acados_generate", True),
+            )
 
     def step(
         self,

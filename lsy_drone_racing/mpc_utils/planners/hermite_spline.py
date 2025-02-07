@@ -1,45 +1,191 @@
 import casadi as ca
 import numpy as np
-from scipy.interpolate import splev, splprep
-from scipy.interpolate import CubicHermiteSpline
-from scipy.interpolate import KroghInterpolator
 from scipy.spatial.transform import Rotation as Rot
-from scipy.integrate import quad
-from scipy import optimize
-from typing import Dict, Any
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from scipy.optimize import minimize
+from scipy.integrate import quad
+
+# # Define the start position and gate positions
+# start_pos = np.array([0, 0, 0])
+# gate_positions = [np.array([1, 0, 1]), np.array([2, 0, 2]), np.array([1, 0, 3])]
+# orientations = [np.array([1, 0, 0]), np.array([1, 0, 0]), np.array([-1, 0, 0])]
+
+
+# def approximate_arc_length(segment, n=1000):
+#     """Approximate the arc length of a segment using a trapezoidal rule."""
+#     length = 0
+#     t_values = np.linspace(0, 1, n)
+#     for i in range(n - 1):
+#         p0 = segment(t_values[i])
+#         p1 = segment(t_values[i + 1])
+#         length += np.linalg.norm(p1 - p0)
+#     return length
+
+
+# # Define the Hermite spline function
+# def hermite_spline(p0, p1, m0, m1, t):
+#     h00 = 2 * t**3 - 3 * t**2 + 1
+#     h10 = t**3 - 2 * t**2 + t
+#     h01 = -2 * t**3 + 3 * t**2
+#     h11 = t**3 - t**2
+#     return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
+
+
+# # Create the symbolic variable for theta
+# theta = ca.SX.sym("theta")
+
+# # Initialize the path
+# path_segments = []
+# arc_lengths = []
+# path_points = []
+
+# # Iterate through the gate positions to create the spline
+# for i in range(len(gate_positions) - 1):
+#     p0 = gate_positions[i]
+#     p1 = gate_positions[i + 1]
+#     m0 = orientations[i]
+#     m1 = orientations[i + 1]
+
+#     # Create the Hermite spline segment
+#     segment_theta = ca.SX.sym(f"segment_theta_{i}")
+#     segment = hermite_spline(p0, p1, m0, m1, segment_theta)
+#     path_segments.append(segment)
+
+#     # Calculate the arc length of the segment
+#     segment_function = ca.Function(f"segment_{i}", [segment_theta], [segment])
+#     arc_length = approximate_arc_length(segment_function)
+#     print(arc_length)
+#     arc_lengths.append(arc_length)
+
+#     # Sample points along the segment
+#     num_samples = 100
+#     for j in range(num_samples + 1):
+#         t = j / num_samples
+#         point = ca.Function("point", [segment_theta], [segment])(t).full().flatten()
+#         path_points.append(point)
+
+# # Normalize theta to be between 0 and 1 over the entire path
+# total_arc_length = sum(arc_lengths)
+# normalized_theta = theta * total_arc_length
+# normalized_theta = np.linspace(0, 1, len(path_points))
+
+# # Create the interpolant
+# print(path_points)
+# path_interpolant_x = ca.interpolant(
+#     "path", "linear", [normalized_theta.tolist()], path_points[:, 0]
+# )
+
+# # Create the symbolic function
+# path_function = ca.Function("path", [theta], [path_interpolant_x(theta)])
+
+
+# # Visualization
+# theta_values = np.linspace(0, 1, 1000)
+# points = np.array([path_function(t).full().flatten() for t in theta_values])
+# # Create the symbolic function for the full path
+# path = ca.SX.zeros(3)
+# for i, segment in enumerate(path_segments):
+#     segment_start = sum(arc_lengths[:i])
+#     segment_end = segment_start + arc_lengths[i]
+#     segment_theta = (normalized_theta - segment_start) / arc_lengths[i]
+#     path += ca.if_else(
+#         ca.logic_and(normalized_theta >= segment_start, normalized_theta < segment_end),
+#         hermite_spline(
+#             gate_positions[i],
+#             gate_positions[i + 1],
+#             orientations[i],
+#             orientations[i + 1],
+#             segment_theta,
+#         ),
+#         0,
+#     )
+
+# # Create the symbolic function
+# path_function = ca.Function("path", [theta], [path])
+
+# # Visualization
+# theta_values = np.linspace(0, 1, 1000)
+# points2 = np.array([path_function(t).full().flatten() for t in theta_values])
+# print(points.shape)
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection="3d")
+# ax.plot(points[:, 0], points[:, 1], points[:, 2], label="Planned Path")
+# ax.plot(points2[:, 0], points2[:, 1], points2[:, 2], label="Planned Path2")
+# ax.scatter(start_pos[0], start_pos[1], start_pos[2], color="red", label="Start Position")
+# # print(gate_positions.shape)
+# # ax.scatter(
+# #     gate_positions[:][1],
+# #     gate_positions[:][1],
+# #     gate_positions[:][1],
+# #     color="blue",
+# #     label="Gate Positions",
+# # )
+# ax.set_xlabel("X")
+# ax.set_ylabel("Y")
+# ax.set_zlabel("Z")
+# ax.legend()
+# plt.show()
 
 
 class HermiteSpline:
-    def __init__(self, theta, start_pos, start_rpy, gates_pos, gates_rpy):
-        self.theta = theta
-        self.start_pos = start_pos
-        self.start_rpy = start_rpy
-        self.gates_pos = gates_pos
-        self.gates_rpy = gates_rpy
-        self.num_gates = gates_pos.shape[0]
-        self.path_function, self.dpath_function = self.fitHermiteSpline()
+    def __init__(self, start_pos, start_rpy, gates_pos, gates_rpy, debug=False):
+        self.waypoints = np.vstack((start_pos, gates_pos))  # , start_pos))
+        self.orientations = np.vstack((start_rpy, gates_rpy))  # , start_rpy))
+        self.tangents = self.compute_normals(self.orientations)
+        self.debug = debug
+
+        self.fitPolynomial()
+
+        self.fitHermiteSpline()
+
+    def updateGates(self, gates_pos, gates_rpy):
+        self.waypoints = np.vstack((self.waypoints[0], gates_pos))
+        self.orientations = np.vstack((self.orientations[0], gates_rpy))
+        self.tangents = self.compute_normals(self.orientations)
+        self.fitPolynomial()
+        self.fitHermiteSpline()
+
+    def getPathPointsForPlotting(self):
+        theta_values = np.linspace(0, 1, 1000)
+        points = np.array([self.path_function(t).full().flatten() for t in theta_values])
+        dpoints = np.array([self.dpath_function(t).full().flatten() for t in theta_values])
+        return points, dpoints
+
+    def computeProgress(self, pos, vel, theta_last):
+        """Compute the progress and dprogress along the path given the current position and velocity.
+
+        args:
+            pos: Current position
+            vel: Current velocity
+            theta_last: Last progress value
+
+        returns:
+            progress: Current progress along the path
+            dprogress: Rate of progress along the path
+        """
+
+        def objective(theta):
+            path_point = self.path_function(theta).full().flatten()
+            return np.linalg.norm(path_point - pos)
+
+        # Minimize the objective function to find the progress
+        progress = minimize(
+            objective, theta_last, bounds=[(theta_last - 0.1, theta_last + 0.1)], method="L-BFGS-B"
+        )
+        progress = progress.x[0]
+        # Compute the derivative of the progress
+        tangent = self.dpath_function(progress).full().flatten()
+        dprogress = np.dot(tangent, vel) / np.linalg.norm(tangent)
+        return progress, dprogress
 
     def fitPolynomial(self):
-        waypoints = np.vstack((self.start_pos, self.gates_pos, self.start_pos))
-        tangents = self.compute_normals(waypoints)
+        waypoints = self.waypoints
         degree = waypoints.shape[0] - 1
-        t = np.linspace(0, 1, waypoints.shape[0])
+        t_waypoints = np.linspace(0, 1, waypoints.shape[0])
 
-        # # Fit polynomial for each dimension
-        # poly_x = CubicHermiteSpline(t, waypoints[:, 0], tangents[:, 0])
-        # poly_y = CubicHermiteSpline(t, waypoints[:, 1], tangents[:, 1])
-        # poly_z = CubicHermiteSpline(t, waypoints[:, 2], tangents[:, 2])
-
-        # # Derivatives of the polynomial functions
-        # dpoly_x = poly_x.derivative()
-        # dpoly_y = poly_y.derivative()
-        # dpoly_z = poly_z.derivative()
-        # Fit polynomial for each dimension
-        poly_coeffs_x = np.polyfit(t, waypoints[:, 0], degree)
-        poly_coeffs_y = np.polyfit(t, waypoints[:, 1], degree)
-        poly_coeffs_z = np.polyfit(t, waypoints[:, 2], degree)
+        poly_coeffs_x = np.polyfit(t_waypoints, waypoints[:, 0], degree)
+        poly_coeffs_y = np.polyfit(t_waypoints, waypoints[:, 1], degree)
+        poly_coeffs_z = np.polyfit(t_waypoints, waypoints[:, 2], degree)
 
         # Create polynomial functions
         poly_x = np.poly1d(poly_coeffs_x)
@@ -62,75 +208,22 @@ class HermiteSpline:
         total_arc_length, _ = quad(arc_length_integrand, 0, 1)
 
         # Calculate arc length up to each gate (includes start and end points)
-        gate_times = np.linspace(0, 1, self.num_gates + 2)
-        gate_arc_lengths = [quad(arc_length_integrand, 0, t)[0] for t in gate_times]
-        # Sample points corresponding to equally spaced arc lengths
-        # Corresponds to the number of spline segments
-        num_samples = 200
-        arc_lengths = np.linspace(0, total_arc_length, num_samples)
-        t_eval = np.zeros(num_samples)
+        arc_lengths = [quad(arc_length_integrand, 0, t)[0] for t in t_waypoints]
 
-        for i in range(1, num_samples):
-
-            def arc_length_diff(t):
-                arc_length, _ = quad(arc_length_integrand, 0, t)
-                return arc_length - arc_lengths[i]
-
-            t_eval[i] = optimize.newton(arc_length_diff, t_eval[i - 1])
-
-        # Sample points corresponding to the gate times
-        gate_times = [
-            optimize.newton(lambda t: quad(arc_length_integrand, 0, t)[0] - al, 0.5)
-            for al in gate_arc_lengths
-        ]
-        # Replace the closest sample point with the gate time
-        manual_indices = np.zeros(len(gate_times), dtype=int)
-        i = 0
-        for gate_time in gate_times:
-            # Find the index of the closest sample point to the gate time
-            closest_index = np.argmin(np.abs(t_eval - gate_time))
-
-            manual_indices[i] = closest_index
-            # t_eval[closest_index] = gate_time
-            i += 1
-        # print(manual_indices)
-
-        # Evaluate the polynomial at the sampled points
-        # t_eval = np.linspace(0, 1, 100)
-        x_eval = poly_x(t_eval)
-        y_eval = poly_y(t_eval)
-        z_eval = poly_z(t_eval)
-
-        # Evaluate the derivatives at the sampled points
-        dx_eval = dpoly_x(t_eval)
-        dy_eval = dpoly_y(t_eval)
-        dz_eval = dpoly_z(t_eval)
-
-        # Combine the evaluated points into a single array
-        fitted_coords = np.vstack((x_eval, y_eval, z_eval)).T
-        tangents = np.vstack((dx_eval, dy_eval, dz_eval)).T
-        # Normalize the tangents
-        tangents = tangents / np.linalg.norm(tangents, axis=1)[:, np.newaxis]
-
-        manual_tangents = self.compute_normals(
-            np.vstack((self.start_rpy, self.gates_rpy, self.start_rpy))
-        )
-
-        # tangents[manual_indices] = manual_tangents
-
-        return fitted_coords, tangents
-        print(fitted_coords)
+        total_arc_length = arc_lengths[-1]
+        self.theta_switch = np.array(arc_lengths) / total_arc_length
+        if self.debug:
+            print("Arc lengths of each spline segment", arc_lengths)
+            print("Progress values at which segments switch", self.theta_switch)
+        return None
 
     def fitHermiteSpline(self):
         # Step 1: Generate Hermite splines for each path segment
-        waypoints, tangents = self.fitPolynomial()
-
-        # waypoints = np.vstack((self.start_pos, self.gates_pos, self.start_pos))
-        # orientations = np.vstack((self.start_rpy, self.gates_rpy, self.start_rpy))
-        # tangents = self.compute_normals(orientations)
+        waypoints = self.waypoints
+        tangents = self.tangents
 
         # Define the progress parameter
-        progress = ca.SX.sym("progress")
+        theta = ca.MX.sym("theta")
 
         def hermite_spline(p0, p1, m0, m1, t):
             """Create a Hermite spline between two points with specified tangents.
@@ -153,111 +246,153 @@ class HermiteSpline:
             p1 = waypoints[i + 1]
             m0 = tangents[i]
             m1 = tangents[i + 1]
-            spline = hermite_spline(p0, p1, m0, m1, progress)
+            t = (theta - self.theta_switch[i]) / (self.theta_switch[i + 1] - self.theta_switch[i])
+            spline = hermite_spline(p0, p1, m0, m1, t)
             splines.append(spline)
 
-        # Define the segments and corresponding progress intervals
-
-        intervals = np.linspace(0, 1, segments + 1)
-
-        # Create a piecewise function for the path
-        path = ca.SX.zeros(3)
+        path = ca.MX.zeros(3)
         for i in range(segments):
-            segment_progress = (progress - intervals[i]) / (intervals[i + 1] - intervals[i])
+            # segment_progress = (theta - self.theta_switch[i]) / (
+            #     self.theta_switch[i + 1] - self.theta_switch[i]
+            # )
             path += ca.if_else(
-                ca.logic_and(progress >= intervals[i], progress < intervals[i + 1]), splines[i], 0
+                ca.logic_and(theta >= self.theta_switch[i], theta < self.theta_switch[i + 1]),
+                splines[i],
+                0,
             )
 
-        # Ensure the path reaches the final point at progress = 1
-        path += ca.if_else(progress == 1, splines[-1], 0)
-        # Create a CasADi function for the path
-        path_function = ca.Function("path", [progress], [path])
+        # Create a CasADi function for the path and its derivative
+        self.path_function = ca.Function("path", [theta], [path])
+        dpath = ca.jacobian(self.path_function(theta), theta)
+        self.dpath_function = ca.Function("dpath", [theta], [dpath])
 
-        progress_values = []
-        path_points = []
-
-        for i in range(segments):
-            p0 = waypoints[i]
-            p1 = waypoints[i + 1]
-            m0 = tangents[i]
-            m1 = tangents[i + 1]
-
-            # Define progress interval for the segment
-            segment_progress = np.linspace(i / segments, (i + 1) / segments, 100, endpoint=False)
-            for t in segment_progress:
-                progress_values.append(t)
-                path_points.append(hermite_spline(p0, p1, m0, m1, (t - i / segments) * segments))
-
-        # Convert to lists
-        progress_values = [float(x) for x in progress_values]
-
-        path_points = [[float(coord) for coord in point] for point in path_points]
-        flattened_list = [item for sublist in path_points for item in sublist]
-        path_points = flattened_list
-
-        # Create CasADi interpolant for the path
-        path_interpolant = ca.interpolant("path", "bspline", [progress_values], path_points)
-
-        # Define symbolic progress variable
-        progress = ca.SX.sym("progress")
-
-        # Create symbolic path function
-        # path_function = path_interpolant  # (progress)
-        # Create symbolic derivative function
-        dpath_value = ca.jacobian(path_function(progress), progress)
-        dpath_function = ca.Function("dpath_function", [progress], [dpath_value])
-        # Step 2: Generate Hermite splines for each path segment
-        # path_segments = []
-        # theta_norm = self.theta * (self.num_gates + 1)
-        # arc_lengths = [0]
-        # for i in range(waypoints.shape[0] - 1):
-        #     P0 = waypoints[i, :]
-        #     P1 = waypoints[i + 1, :]
-        #     T0 = tangents[i, :]
-        #     T1 = tangents[i + 1, :]
-        #     t = (theta_norm - i) / (self.num_gates + 1)
-        #     h00, h10, h01, h11 = self.hermite_basis(t)
-
-        #     segment = h00 * P0 + h10 * T0 + h01 * P1 + h11 * T1
-        #     path_segments.append(segment)
-
-        #     if i > 0:
-        #         arc_lengths.append(
-        #             arc_lengths[-1] + ca.norm_2(path_segments[i] - path_segments[i - 1])
-        #         )
-
-        # arc_lengths = ca.vertcat(*arc_lengths) / arc_lengths[-1]  # Normalize
-
-        # # Step 3: Combine the path segments into a single function
-        # # path_segments = ca.horzcat(*path_segments)  # Combine segments into a single matrix
-        # # path_segments = ca.DM(path_segments).full().flatten().tolist()  # Convert to list of floats
-        # arc_lengths = ca.DM(arc_lengths).full().flatten().tolist()  # Convert to list of floats
-        # print(arc_lengths)
-        # path_segments = (
-        #     ca.DM(ca.vertcat(*path_segments)).full().flatten().tolist()
-        # )  # Convert to list of floats
-
-        # thetas = np.linspace(0, 1, 100).tolist()
-        # path_function = ca.interpolant("path", "bspline", thetas, path_segments)
-
-        return path_function, dpath_function
-
-    # def compute_normals(self, orientations):
-    #     """Compute the normal vectors from the orientations."""
-    #     normals = []
-    #     for orientation in orientations:
-    #         rot = Rot.from_euler("xyz", orientation)
-    #         normal = rot.apply([1, 0, 0])  # Assuming the normal is along the x-axis
-    #         normals.append(normal)
-    #     return np.array(normals)
+        return None
 
     def compute_normals(self, orientations):
-        # Compute tangents (normals) from orientations
-        tangents = []
-        for rpy in orientations:
+        tangents = np.zeros((len(orientations), 3))
+        for i in range(len(orientations)):
             # Convert RPY to a direction vector (assuming RPY represents the normal direction)
-            direction = np.array(
-                [np.cos(rpy[2]) * np.cos(rpy[1]), np.sin(rpy[2]) * np.cos(rpy[1]), np.sin(rpy[1])]
-            )
-            tangents.append(direction)
-        return np.array(tangents)
+            rot_mat = Rot.from_euler("xyz", orientations[i, :]).as_matrix()
+            direction = rot_mat @ np.array([0, 1, 0])
+            tangents[i, :] = direction  # / np.linalg.norm(direction)
+        # print(tangents)
+        return tangents
+
+
+# import casadi as ca
+# import numpy as np
+
+# from scipy import optimize
+# from typing import Dict, Any
+# import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
+# from scipy.interpolate import splev, splprep
+# from scipy.interpolate import CubicHermiteSpline
+
+
+# class HermiteSpline:
+#     def __init__(self, theta, start_pos, start_rpy, gates_pos, gates_rpy):
+#         self.theta = theta
+#         self.start_pos = start_pos
+#         self.start_rpy = start_rpy
+#         self.gates_pos = gates_pos
+#         self.gates_rpy = gates_rpy
+#         self.waypoints = np.vstack((self.start_pos, self.gates_pos))
+#         self.orientations = np.vstack((self.start_rpy, self.gates_rpy))
+#         self.tangents = self.compute_normals(self.orientations)
+#         self.num_gates = gates_pos.shape[0]
+#         # self.path_function, self.dpath_function = self.fitHermiteSpline()
+
+#     def fitPolynomial(self):
+#         waypoints = self.waypoints
+#         tangents = self.tangents
+#         degree = waypoints.shape[0] - 1
+#         t = np.linspace(0, 1, waypoints.shape[0])
+
+#         # Fit polynomial for each dimension
+#         poly_coeffs_x = np.polyfit(t, waypoints[:, 0], degree)
+#         poly_coeffs_y = np.polyfit(t, waypoints[:, 1], degree)
+#         poly_coeffs_z = np.polyfit(t, waypoints[:, 2], degree)
+
+#         # Create polynomial functions
+#         poly_x = np.poly1d(poly_coeffs_x)
+#         poly_y = np.poly1d(poly_coeffs_y)
+#         poly_z = np.poly1d(poly_coeffs_z)
+
+#         # Sample points corresponding to equally spaced arc lengths
+#         # Corresponds to the number of spline segments
+#         num_samples = 1000
+#         fitted_coords = np.zeros((num_samples, 3))
+#         fitted_tangents = np.zeros((num_samples, 3))
+#         for i in range(num_samples):
+#             t = i / num_samples
+#             fitted_coords[i, :] = [poly_x(t), poly_y(t), poly_z(t)]
+#         #    fitted_tangents[i, :] = [dpoly_x(t), dpoly_y(t), dpoly_z(t)]
+
+#         return fitted_coords  # , tangents
+
+#     def update_waypoints(self, gates_pos=None, gates_rpy=None, start_pos=None, start_rpy=None):
+#         if gates_pos is not None:
+#             self.gates_pos = gates_pos
+#             self.gates_rpy = gates_rpy
+#         if start_pos and start_rpy is not None:
+#             self.start_pos = start_pos
+#             self.start_rpy = start_rpy
+
+#         self.waypoints = np.vstack((self.start_pos, self.gates_pos))
+#         self.orientations = np.vstack((self.start_rpy, self.gates_rpy))
+#         self.tangents = self.compute_normals(self.orientations)
+#         self.path_function, self.dpath_function = self.fitHermiteSpline()
+
+#     def fitHermiteSpline(self):
+#         waypoints = self.waypoints
+#         tangents = self.tangents
+
+#         progress = ca.SX.sym("progress")
+
+#         def hermite_spline(p0, p1, m0, m1, t):
+#             h00 = 2 * t**3 - 3 * t**2 + 1
+#             h10 = t**3 - 2 * t**2 + t
+#             h01 = -2 * t**3 + 3 * t**2
+#             h11 = t**3 - t**2
+#             return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
+
+#         splines = []
+#         lengths = []
+#         segments = len(waypoints) - 1
+#         for i in range(segments):
+#             p0 = waypoints[i]
+#             p1 = waypoints[i + 1]
+#             m0 = tangents[i]
+#             m1 = tangents[i + 1]
+#             spline = hermite_spline(p0, p1, m0, m1, progress)
+#             splines.append(spline)
+
+#             # Calculate the length of the spline
+#             t_sym = ca.SX.sym("t")
+#             spline_t = hermite_spline(p0, p1, m0, m1, t_sym)
+#             ds = ca.norm_2(ca.jacobian(spline_t, t_sym))
+#             arc_length_integrand = ca.Function("arc_length_integrand", [t_sym], [ds])
+
+#             length = quad(lambda t: arc_length_integrand(t).full().flatten()[0], 0, 1)[0]
+#             lengths.append(length)
+
+#         total_length = sum(lengths)
+#         intervals = np.cumsum([0] + lengths) / total_length
+
+#         path = ca.SX.zeros(3)
+#         for i in range(segments):
+#             segment_progress = (progress - intervals[i]) / (intervals[i + 1] - intervals[i])
+#             path += ca.if_else(
+#                 ca.logic_and(progress >= intervals[i], progress < intervals[i + 1]), splines[i], 0
+#             )
+
+#         path += ca.if_else(progress == 1, splines[-1], 0)
+#         path_function = ca.Function("path", [progress], [path])
+
+#         dpath_value = ca.jacobian(path_function(progress), progress)
+#         dpath_function = ca.Function("dpath_function", [progress], [dpath_value])
+
+#         return path_function, dpath_function
+
+#

@@ -4,7 +4,7 @@
 # | :-----------------: | :-----------------------: | :-------------------------: | :--------------------: | :---------------: |
 # | `level3.toml`       | **Yes**                   | **Yes**                     | **Yes**                | Robustness        |
 [controller]
-file = "trajectory_controller.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
+file = "mpc.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
 
 [deploy]
 ### Settings only relevant for deployment
@@ -39,7 +39,7 @@ low = [-0.1, -0.1, -0.1]
 high = [0.1, 0.1, 0.1]
 
 [env]
-id = "DroneRacingThrust-v0" # Either "DroneRacing-v0" or "DroneRacingThrust-v0". If using "DroneRacingThrust-v0", the drone will use the thrust controller instead of the position controller.
+id = "DroneRacing-v0" # Either "DroneRacing-v0" or "DroneRacingThrust-v0". If using "DroneRacingThrust-v0", the drone will use the thrust controller instead of the position controller.
 reseed = false        # Whether to re-seed the random number generator between episodes
 seed = 1337           # Random seed
 freq = 60             # Frequency of the environment's step function, in Hz
@@ -82,7 +82,7 @@ ang_vel = [0, 0, 0]
 type = "uniform" # Everything that can be used as a distribution in numpy.random
 # Kwargs that are permissable in the np random function
 low = [-0.3, -0.3, 0.0] #[-0.1, -0.1, 0.0]
-high = [0.3, 0.3, 0.07] #[0.1, 0.1, 0.02]
+high = [0.3, 0.3, 0.06] #[0.1, 0.1, 0.02]
 
 [env.randomization.drone_rpy]
 type = "uniform"

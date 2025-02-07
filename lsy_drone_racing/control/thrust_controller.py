@@ -144,6 +144,7 @@ class ThrustController(BaseController):
 
         R_desired = np.vstack([x_axis_desired, y_axis_desired, z_axis_desired]).T
         euler_desired = R.from_matrix(R_desired).as_euler("xyz", degrees=False)
+        print("Thrust desired: ", thrust_desired, "RPY desired: ", euler_desired)
         thrust_desired, euler_desired
         return np.concatenate([[thrust_desired], euler_desired])
 

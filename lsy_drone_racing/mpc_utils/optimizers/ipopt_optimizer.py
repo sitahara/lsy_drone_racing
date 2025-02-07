@@ -62,19 +62,17 @@ class IPOPTOptimizer(BaseOptimizer):
         cost = 0
         stage_cost_function = self.dynamics.stageCostFunc
         terminal_cost_function = self.dynamics.terminalCostFunc
-
         for k in range(self.n_horizon):
             cost += stage_cost_function(
                 X[:, k], U[:, k], self.dynamics.param_values, X_ref[:, k], U_ref[:, k]
             )
-
         cost += terminal_cost_function(
             X[:, -1],
             np.zeros((self.nu,)),
             self.dynamics.param_values,
             X_ref[:, -1],
             np.zeros((self.nu,)),
-        )  # Terminal cost
+        )
 
         # Add slack penalty to the cost function
         cost += slack_penalty * (ca.sumsqr(s_x) + ca.sumsqr(s_u))

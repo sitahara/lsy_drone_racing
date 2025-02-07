@@ -2,5 +2,6 @@
 
 from .PathPlanner import HermiteSplinePathPlanner, PathPlanner
 from .hermite_spline import HermiteSpline
+from .polynomial_planner import PolynomialPlanner
 
-__all__ = ["PathPlanner", "HermiteSplinePathPlanner", "HermiteSpline"]
+__all__ = ["HermiteSpline"]

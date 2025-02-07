@@ -16,6 +16,7 @@ from lsy_drone_racing.mpc_utils import (
     DroneDynamics,
     IPOPTOptimizer,
     MPCCppDynamics,
+    PolynomialPlanner,
 )
 
 
@@ -80,6 +81,9 @@ class MPC(BaseController):
             self.dynamics = MPCCppDynamics(
                 initial_obs, initial_info, dynamics_info, constraints_info, cost_info=mpcc_cost_info
             )
+            # path_points, path_tangents = self.dynamics.pathPlanner.getPathPointsForPlotting()
+            # self.plotInPyBullet(path_points, lifetime=0, color=[0, 0, 1], tangents=path_tangents)
+
         else:
             self.dynamics = DroneDynamics(
                 initial_obs, initial_info, dynamics_info, constraints_info, cost_info=cost_info
@@ -100,7 +104,17 @@ class MPC(BaseController):
         self.opt = AcadosOptimizer(
             dynamics=self.dynamics, solver_options=solver_options, optimizer_info=optimizer_info
         )
-
+        # theta = ca.SX.sym("theta")
+        # self.planner = PolynomialPlanner(
+        #     theta,
+        #     initial_obs["pos"],
+        #     initial_obs["rpy"],
+        #     initial_obs["gates_pos"],
+        #     initial_obs["gates_rpy"],
+        #     self.ts,
+        #     self.n_horizon,
+        #     desired_time=7.0,
+        # )
         self.set_target_trajectory()
 
         self.calculate_initial_guess()
@@ -129,7 +143,7 @@ class MPC(BaseController):
             action = self.opt.step(self.current_state, obs, self.x_ref, self.u_ref)
         end_time = time.time()
         elapsed_time = end_time - start_time
-        # print(f"Control signal update time: {elapsed_time:.5f} seconds")
+        print(f"Control signal update time: {elapsed_time:.5f} seconds")
         # print(f"Current position: {self.current_state[:3]}")
         if self.print_info:
             print(f"Desired position: {self.x_ref[:3, 1]}")
@@ -137,7 +151,7 @@ class MPC(BaseController):
                 print(f"Next position: {action[:3]}")
                 action[6:9] = np.zeros(3)
             elif self.dynamics.interface == "Thrust":
-                print(f"Total Thrust:", action[0], "Torques:", action[1:])
+                print(f"Total Thrust:", action[0], "Desired RPY:", action[1:])
 
         return action.flatten()
 
@@ -242,13 +256,14 @@ class MPC(BaseController):
             n_repeat = np.sum(t_horizon > self.t_total)
             pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
         # print(reference_trajectory_horizon)
+        # pos_des = self.planner.output_xref(current_time)
         self.x_ref[:3, :] = (
             pos_des  # np.tile( np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1) )  # pos_des
         )
         self.n_step += 1
         return None
 
-    def plotInPyBullet(self, points, lifetime=0, color=[1, 0, 0]):
+    def plotInPyBullet(self, points, lifetime=0, color=[1, 0, 0], tangents=None):
         """Plot the desired state in PyBullet."""
         try:
             # Plot the spline as a line in PyBullet
@@ -261,105 +276,15 @@ class MPC(BaseController):
                     lifeTime=lifetime,  # 0 means the line persists indefinitely
                     physicsClientId=0,
                 )
+            if tangents is not None:
+                for i in range(len(points)):
+                    p.addUserDebugLine(
+                        points[i],
+                        points[i] + 0.1 * tangents[i],
+                        lineColorRGB=[0, 1, 1],  # Green color
+                        lineWidth=2,
+                        lifeTime=lifetime,  # 0 means the line persists indefinitely
+                        physicsClientId=0,
+                    )
         except p.error:
             ...  # Ignore errors if PyBullet is not available
-
-    # def setupCostFunction(self, cost_info: dict) -> None:
-    #     """Setup the cost function for the MPC controller."""
-    #     # Define the cost function parameters
-    #     costs = {}
-    #     costs["cost_type"] = cost_info["cost_type"]
-    #     if self.dynamics.nx == 13:
-    #         cost_info["Qs"] = np.concatenate(
-    #             [
-    #                 cost_info["Qs_pos"],
-    #                 cost_info["Qs_vel"],
-    #                 cost_info["Qs_quat"],
-    #                 cost_info["Qs_drpy"],
-    #             ]
-    #         )
-    #         cost_info["Qt"] = np.concatenate(
-    #             [
-    #                 cost_info["Qt_pos"],
-    #                 cost_info["Qt_vel"],
-    #                 cost_info["Qt_quat"],
-    #                 cost_info["Qt_drpy"],
-    #             ]
-    #         )
-    #     else:
-    #         cost_info["Qs"] = np.concatenate(
-    #             [
-    #                 cost_info["Qs_pos"],
-    #                 cost_info["Qs_vel"],
-    #                 cost_info["Qs_rpy"],
-    #                 cost_info["Qs_drpy"],
-    #             ]
-    #         )
-    #         cost_info["Qt"] = np.concatenate(
-    #             [
-    #                 cost_info["Qt_pos"],
-    #                 cost_info["Qt_vel"],
-    #                 cost_info["Qt_rpy"],
-    #                 cost_info["Qt_drpy"],
-    #             ]
-    #         )
-    #     if self.dynamics.useControlRates:
-    #         R = np.diag(cost_info["Rd"] / self.dynamics.u_scal)
-    #         Qs = np.diag(np.concatenate([cost_info["Qs"], cost_info["Rs"]]) / self.dynamics.x_scal)
-    #         Qt = np.diag(np.concatenate([cost_info["Qt"], cost_info["Rs"]]) / self.dynamics.x_scal)
-    #     else:
-    #         R = np.diag(cost_info["Rs"] / self.dynamics.u_scal)
-    #         Qs = np.diag(cost_info["Qs"] / self.dynamics.x_scal)
-    #         Qt = np.diag(cost_info["Qt"] / self.dynamics.x_scal)
-
-    #     costs["R"] = R
-    #     costs["Qs"] = Qs
-    #     costs["Qt"] = Qt
-    #     self.costs = costs
-    #     self.costs["cost_function"] = self.baseCost  # cost function for the MPC
-
-    # def baseCost(self, x, x_ref, u, u_ref):
-    #     """Base Cost function for the MPC controller."""
-    #     return ca.mtimes([(x - x_ref).T, self.costs["Qs"], (x - x_ref)]) + ca.mtimes(
-    #         [(u - u_ref).T, self.costs["R"], (u - u_ref)]
-    #     )
-
-    # def setupCostTimeFunction(self, cost_info: dict) -> None:
-    #     """Setup the cost function for the MPC controller."""
-    #     # Define the cost function parameters
-    #     costs = {}
-    #     costs["cost_type"] = "External"
-    #     costs["Qs_pos"] = np.diag(cost_info["Qs_pos"])
-    #     costs["Qs_vel"] = np.diag(cost_info["Qs_vel"])
-    #     costs["Qs_rpy"] = np.diag(cost_info["Qs_rpy"])
-    #     costs["Qs_drpy"] = np.diag(cost_info["Qs_drpy"])
-    #     costs["R"] = np.diag(cost_info["Rs"])
-    #     costs["Q_time"] = cost_info["Q_time"]
-    #     costs["Q_gate"] = cost_info["Q_gate"]
-    #     self.costs = costs
-    #     self.costs["cost_function"] = self.timeCost
-
-    # def timeCost(self, x, u, p):
-    #     vel = x[3:6]
-    #     cost_vel = ca.mtimes([vel.T, self.costs["Qs_vel"], vel])
-
-    #     rpy = x[6:9]
-    #     cost_rpy = ca.mtimes([rpy.T, self.costs["Qs_rpy"], rpy])
-
-    #     drpy = x[9:12]
-    #     cost_drpy = ca.mtimes([drpy.T, self.costs["Qs_drpy"], drpy])
-
-    #     t = x[self.dynamics.state_indices["time"]]
-    #     cost_time = t * self.costs["Q_time"] * t
-
-    #     cost_u = ca.mtimes([u.T, self.costs["R"], u])
-
-    #     pos_rpy = ca.vertcat(x[:3], x[6:9])
-    #     err = ca.if_else(
-    #         x[self.dynamics.state_indices["gate_passed"]],
-    #         ca.norm_2(pos_rpy - p[self.dynamics.param_indices["subsequent_gate"]]),
-    #         ca.norm_2(pos_rpy - p[self.dynamics.param_indices["next_gate"]]),
-    #     )
-    #     cost_gate = ca.mtimes([err.T, self.costs["Q_gate"], err])
-
-    #     return cost_gate + cost_vel + cost_rpy + cost_drpy + cost_u + cost_time

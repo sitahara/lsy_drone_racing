@@ -2,7 +2,7 @@
 interface = "Mellinger" # "Mellinger", "Thrust"
 ts = 0.016666
 n_horizon = 60
-controlType = "Torques" # "Thrusts", "Torques"
+controlType = "Thrusts" # "Thrusts", "Torques", "RPMs"
 dynamicsType= "Quaternion" # "Quaternion", "Euler", "MPCC"
 useControlRates = false # always true for MPCC dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
@@ -64,6 +64,8 @@ acados_qp_solver= "PARTIAL_CONDENSING_HPIPM"
 acados_globalization= "MERIT_BACKTRACKING"
 acados_tol= 1e-3
 acados_qp_tol= 1e-3
+acados_build=true
+acados_generate=true
 
 [hyperparameters]
 [hyperparameters.linear_cost]

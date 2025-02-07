@@ -53,27 +53,26 @@ class TestHermiteSpline(unittest.TestCase):
 
     def test_plot_path(self):
         path = HermiteSpline(
-            self.theta,
-            self.start_position,
-            self.start_orientation,
-            self.gate_positions,
-            self.gate_orientations,
+            self.start_position, self.start_orientation, self.gate_positions, self.gate_orientations
         )
-        waypoints, tangents = path.fitPolynomial()
-        path_func, dpath_func = path.fitHermiteSpline()
+        waypoints = path.waypoints
+        tangents = path.tangents
+        # waypoints, tangents = path.fitPolynomial()
+        path_func = path.path_function
+        dpath_func = path.dpath_function
+        # path_func, dpath_func = path.fitHermiteSpline()
 
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
         # Evaluate the path at intervals
-        theta_values = np.linspace(0, 1, 100)
+        theta_values = np.linspace(0, 0.8, 1000)
         path_points = np.array([path_func(theta).full().flatten() for theta in theta_values])
         dpath_points = np.array([dpath_func(theta).full().flatten() for theta in theta_values])
 
         ax.plot(
             path_points[:, 0], path_points[:, 1], path_points[:, 2], label="Hermite Spline Path"
         )
-        ax.plot(waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], label="Waypoints", color="black")
         ax.scatter(
             self.gate_positions[:, 0],
             self.gate_positions[:, 1],
@@ -89,27 +88,27 @@ class TestHermiteSpline(unittest.TestCase):
             label="Start",
         )
         # Add tangents at the path points to the plot
-        for i in range(len(path_points)):
-            ax.quiver(
-                path_points[i, 0],
-                path_points[i, 1],
-                path_points[i, 2],
-                dpath_points[i, 0],
-                dpath_points[i, 1],
-                dpath_points[i, 2],
-                length=0.1,
-                color="green",
-                label="Path Tangents" if i == 0 else "",
-            )
-        gate_normals = path.compute_normals(self.gate_orientations)
+        # for i in range(len(path_points)):
+        #     ax.quiver(
+        #         path_points[i, 0],
+        #         path_points[i, 1],
+        #         path_points[i, 2],
+        #         dpath_points[i, 0],
+        #         dpath_points[i, 1],
+        #         dpath_points[i, 2],
+        #         length=0.1,
+        #         color="green",
+        #         label="Path Tangents" if i == 0 else "",
+        #     )
+        # gate_normals = path.compute_normals(self.gate_orientations)
         for i in range(len(self.gate_positions)):
             ax.quiver(
-                self.gate_positions[i, 0],
-                self.gate_positions[i, 1],
-                self.gate_positions[i, 2],
-                gate_normals[i, 0],
-                gate_normals[i, 1],
-                gate_normals[i, 2],
+                waypoints[i, 0],
+                waypoints[i, 1],
+                waypoints[i, 2],
+                tangents[i, 0],
+                tangents[i, 1],
+                tangents[i, 2],
                 length=0.1,
                 color="red",
                 label="Gate Tangents" if i == 0 else "",

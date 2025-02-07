@@ -5,21 +5,14 @@ import numpy as np
 import toml
 from scipy.spatial.transform import Rotation as Rot
 
-from lsy_drone_racing.mpc_utils.planners import HermiteSplinePathPlanner, PathPlanner, HermiteSpline
+from lsy_drone_racing.mpc_utils.planners import HermiteSpline
 from lsy_drone_racing.mpc_utils.utils import (
     W1,
-    Rbi,
-    W1s,
-    W2s,
-    dW2s,
-    quaternion_conjugate,
     quaternion_product,
     quaternion_rotation,
     quaternion_to_euler,
     quaternion_to_rotation_matrix,
-    rungeKuttaExpr,
-    rungeKuttaFcn,
-    shuffleQuat,
+    W2,
 )
 
 from .drone_dynamics import DroneDynamics
@@ -39,6 +32,7 @@ class MPCCppDynamics(DroneDynamics):
         self.baseDynamics = "MPCC"
         self.controlType = "Thrusts"
         self.useControlRates = True
+        self.last_theta = 0
 
         # Setup the Dynamics, returns expressions for the continuous dynamics
         self.setup_dynamics()
@@ -46,46 +40,32 @@ class MPCCppDynamics(DroneDynamics):
         self.setupBoundsAndScals()
         # Init the path Planner
         self.pathPlanner = HermiteSpline(
-            self.x[self.state_indices["progress"]],
             initial_obs["pos"],
             initial_obs["rpy"],
             initial_obs["gates_pos"],
             initial_obs["gates_rpy"],
         )
-
-        # HermiteSplinePathPlanner(
-        #     self.p,  # Complete parameter vector
-        #     self.param_indices,  # Indices of the parameters
-        #     self.current_param_index,  # Current index of the parameters
-        #     initial_obs["gates_pos"],
-        #     initial_obs["gates_rpy"],
-        #     initial_obs["pos"],
-        #     initial_obs["rpy"],
-        #     self.x[self.state_indices["progress"]],  # Pass the progress variable
-        # )
-        # self.pathPlanner.testPath()
-        # raise Exception("Test")
-        # self.p = self.pathPlanner.p
-        # self.param_indices = self.pathPlanner.param_indices
-        # self.current_param_index = self.pathPlanner.current_param_index
         # Setup nonlinear constraints
         self.setupNLConstraints()
         # Setup the cost function
         self.setupMPCCCosts()
         # Last step
         super().setupCasadiFunctions()
+        if self.ukf_info["useUKF"]:
+            self.initUKF()
 
     def setup_dynamics(self):
-        self.modelName = "MPCCpp"
+        self.modelName = "MPCC"
         # States
         pos = ca.MX.sym("pos", 3)  # position in world frame
         vel = ca.MX.sym("vel", 3)  # velocity in world frame
         quat = ca.MX.sym("quat", 4)  # [qx, qy, qz,qw] quaternion rotation from body to world
         w = ca.MX.sym("w", 3)  # angular velocity in body frame
-        f = ca.MX.sym("f", 4)  # individual rotor thrusts
+        f = ca.MX.sym("f", 4)  # individual rotor thrusts, actual control
         progress = ca.MX.sym("progress", 1)  # progress along the path
         dprogress = ca.MX.sym("dprogress", 1)  # progress rate
         x = ca.vertcat(pos, vel, quat, w, f, progress, dprogress)  # state vector
+
         self.state_indices = {
             "pos": np.arange(0, 3),
             "vel": np.arange(3, 6),
@@ -97,42 +77,31 @@ class MPCCppDynamics(DroneDynamics):
         }
 
         # Controls
-        df = ca.MX.sym("df", 4)  # individual rotor thrust rates
+        df = ca.MX.sym("df", 4)  # individual rotor thrust rates, virtual control
         ddprogress = ca.MX.sym("ddprogress", 1)  # progress rate, virtual control
         u = ca.vertcat(df, ddprogress)  # control vector
         self.control_indices = {"df": np.arange(0, 4), "ddprogress": np.arange(4, 5)}
 
-        # Helper variables
-        beta = self.arm_length / ca.sqrt(2.0)
-        # Motor Thrusts to torques
-        torques = ca.vertcat(
-            beta * (f[0] + f[1] - f[2] - f[3]),
-            beta * (-f[0] + f[1] + f[2] - f[3]),
-            self.gamma * (f[0] - f[1] + f[2] - f[3]),
-        )  # tau_x, tau_y, tau_z
-        # total thrust
-        thrust_total = ca.vertcat(0, 0, (f[0] + f[1] + f[2] + f[3]) / self.mass)
+        torques = self.thrustsToTorques_sym(f)
+        thrust_vec = ca.vertcat(0, 0, (f[0] + f[1] + f[2] + f[3]) / self.mass)
+
         # rotation matrix for quaternions from body to world frame
         Rquat = quaternion_to_rotation_matrix(quat)
 
         # Define the dynamics
-        d_pos = vel
+        dpos = vel
         if self.useDrags:
-            d_vel = (
-                self.gv
-                + quaternion_rotation(quat, thrust_total)
-                - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
-            )
+            dvel = self.gv + Rquat @ thrust_vec - ca.mtimes([Rquat, self.DragMat, Rquat.T, vel])
         else:
-            d_vel = self.gv + quaternion_rotation(quat, thrust_total)
+            dvel = self.gv + Rquat @ thrust_vec
+        dquat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
+        dw = self.J_inv @ (torques - ca.cross(w, self.J @ w))
 
-        d_quat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
-        d_w = self.J_inv @ (torques - (ca.skew(w) @ self.J @ w))
-        d_f = df
-        d_progress = dprogress
-        d_dprogress = ddprogress
+        df = df
+        dprogress = dprogress
+        ddprogress = ddprogress
 
-        dx = ca.vertcat(d_pos, d_vel, d_quat, d_w, d_f, d_progress, d_dprogress)
+        dx = ca.vertcat(dpos, dvel, dquat, dw, df, dprogress, ddprogress)
         self.x = x
         self.nx = x.size()[0]
         self.dx = dx
@@ -146,21 +115,21 @@ class MPCCppDynamics(DroneDynamics):
 
     def transformState(self, x):
         # Extract the position, velocity, euler angles, and angular velocities
+        if self.last_u is None:
+            self.last_u = np.zeros((4,))
+        if self.ukf_info["useUKF"]:
+            # x1 = x
+            x = self.runUKF(z=x, u=self.last_u)
         pos = x[:3]
         vel = x[3:6]
         rpy = x[6:9]
         drpy = x[9:12]
-        progress, dprogress = self.pathPlanner.computeProgress(pos, vel)
-
-        # Convert to used states
         w = W1(rpy) @ drpy
         quat = Rot.from_euler("xyz", rpy).as_quat()
-
-        if self.last_u is None:
-            self.last_u = np.zeros((5,))
-
+        progress, dprogress = self.pathPlanner.computeProgress(pos, vel, self.last_theta)
+        self.last_theta = progress
         x = np.concatenate(
-            [pos, vel, quat, w, self.last_u[self.control_indices["df"]], [progress], dprogress]
+            [pos, vel, quat, w, self.last_u[self.control_indices["df"]], [progress], [dprogress]]
         )
         # Predict the state into the future if self.usePredict is True
         if self.usePredict and self.last_u is not None:
@@ -170,31 +139,25 @@ class MPCCppDynamics(DroneDynamics):
 
     def transformAction(self, x_sol: np.ndarray, u_sol: np.ndarray) -> np.ndarray:
         """Transforms optimizer solutions to controller inferfaces (Mellinger or Thrust)."""
-        self.last_u = x_sol[
-            np.concatenate([self.state_indices["f"], self.state_indices["dprogress"]])
-        ]
+        self.last_u = x_sol[self.state_indices["f"], 1]
 
         if self.interface == "Thrust":
-            thrusts = self.last_u[self.control_indices["df"]]
-            torques = np.array(
-                [
-                    self.beta * (thrusts[0] + thrusts[1] - thrusts[2] - thrusts[3]),
-                    self.beta * (-thrusts[0] + thrusts[1] + thrusts[2] - thrusts[3]),
-                    self.gamma * (thrusts[0] - thrusts[1] + thrusts[2] - thrusts[3]),
-                ]
-            )
+            thrusts = x_sol[self.state_indices["f"], 1]
             tot_thrust = np.sum(thrusts)
-            action = np.concatenate([[tot_thrust], torques])
+            quat = x_sol[self.state_indices["quat"], 1]
+            rpy = Rot.from_quat(quat).as_euler("xyz")
+
+            action = np.concatenate([[tot_thrust], rpy])
         elif self.interface == "Mellinger":
             action = x_sol[:, 1]
             pos = action[self.state_indices["pos"]]
             vel = action[self.state_indices["vel"]]
             w = action[self.state_indices["w"]]
             quat = action[self.state_indices["quat"]]
-            yaw = Rot.from_quat(quat).as_euler("xyz")[2]
+            yaw = Rot.from_quat(quat).as_euler("xyz")[-1]
 
-            acc_world = (vel - x_sol[:, 0][self.state_indices["vel"]]) / self.ts
-            yaw = action[8]
+            acc_world = (vel - x_sol[self.state_indices["vel"], 0]) / self.ts
+            drpy = W2(rpy) @ w
             action = np.concatenate([pos, vel, acc_world, [yaw], w])
         return action.flatten()
 
@@ -211,32 +174,15 @@ class MPCCppDynamics(DroneDynamics):
         """Update the parameters of the drone/environment controller."""
         # Checks whether gate observation has been updated, replans if needed, and updates the path, dpath, and gate progresses parameters
         updated = False
-        if init:
+        if init and self.p is not None:
             self.param_values = np.zeros((self.p.size()[0],))
             self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
                 :, :-1
             ].flatten()
-            # self.param_values[self.param_indices["gate_progresses"]] = (
-            #     self.pathPlanner.gate_progresses
-            # )
-            # self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
-            # self.param_values[self.param_indices["gates_rpy"]] = self.gates_rpy.flatten()
-            # self.param_values[self.param_indices["start_pos"]] = self.initial_obs["pos"]
-            # self.param_values[self.param_indices["start_rpy"]] = self.initial_obs["rpy"]
-
-        else:
-            if np.any(np.not_equal(self.gates_visited, obs["gates_visited"])):
-                self.gates_visited = obs["gates_visited"]
-                self.gates_pos = obs["gates_pos"]
-                self.gates_rpy = obs["gates_rpy"]
-                self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
-                self.param_values[self.param_indices["gates_rpy"]] = self.gates_rpy.flatten()
-                self.pathPlanner.update_gates(self.gates_pos, self.gates_rpy)
-                self.param_values[self.param_indices["gate_progresses"]] = (
-                    self.pathPlanner.gate_progresses
-                )
-                updated = True
-            # Checks whether obstacle observation has been updated, updates the obstacle positions
+            self.param_values[self.param_indices["gate_progresses"]] = (
+                self.pathPlanner.theta_switch[1:]
+            )
+        elif self.p is not None:
             if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
@@ -244,7 +190,15 @@ class MPCCppDynamics(DroneDynamics):
                     :, :-1
                 ].flatten()
                 updated = True
-            # Return the updated parameter values for the acados interface
+            if np.any(np.not_equal(self.gates_visited, obs["gates_visited"])):
+                self.gates_visited = obs["gates_visited"]
+                self.gates_pos = obs["gates_pos"]
+                self.gates_rpy = obs["gates_rpy"]
+                self.pathPlanner.updateGates(self.gates_pos, self.gates_rpy)
+                self.param_values[self.param_indices["gate_progresses"]] = (
+                    self.pathPlanner.theta_switch[1:]
+                )
+                updated = True
         return updated
 
     def setupTunnelConstraints(self):
@@ -254,12 +208,9 @@ class MPCCppDynamics(DroneDynamics):
         pos = self.x[self.state_indices["pos"]]
         # Parameter (all symbolic variables)
         gate_progresses = ca.MX.sym(
-            "gate_progresses", self.pathPlanner.num_gates
+            "gate_progresses", len(self.gates_pos)
         )  # self.p[self.param_indices["gate_progresses"]]
-        # gates_pos = self.p[self.param_indices["gates_pos"]].reshape((self.pathPlanner.num_gates, 3))
-        # gates_rpy = self.p[self.param_indices["gates_rpy"]].reshape((self.pathPlanner.num_gates, 3))
-        # start_pos = self.p[self.param_indices["start_pos"]]
-        # start_rpy = self.p[self.param_indices["start_rpy"]]
+        self.addToParameters(gate_progresses, "gate_progresses")
         # Nominal tunnel width = tunnel height
         Wn = self.Wn
         # Tunnel width = tunnel height at the gate
@@ -301,23 +252,15 @@ class MPCCppDynamics(DroneDynamics):
         tunnel_constraints.append(2 * W - (pos - p0).T @ b)
 
         # Add the tunnel constraints to the the constraints
-        if self.nl_constr is None:
-            self.nl_constr = ca.vertcat(*tunnel_constraints)
-            self.nl_constr_lh = np.zeros((4,))
-            self.nl_constr_uh = np.ones((4,)) * 1e9
-        else:
-            self.nl_constr = ca.vertcat(self.nl_constr, *tunnel_constraints)
-            self.nl_constr_lh = np.concatenate([self.nl_constr_lh, np.zeros((4,))])
-            self.nl_constr_uh = np.concatenate([self.nl_constr_uh, np.ones((4,)) * 1e9])
+        tunnel_constraints = ca.vertcat(*tunnel_constraints)
+        tunnel_lh = np.zeros((4,))
+        tunnel_uh = np.ones((4,)) * 1e9
 
-        self.nl_constr_indices["tunnel"] = np.arange(
-            self.current_nl_constr_index, len(tunnel_constraints) + self.current_nl_constr_index
-        )
-        self.current_nl_constr_index += len(tunnel_constraints)
+        self.addToConstraints(tunnel_constraints, tunnel_lh, tunnel_uh, "tunnel")
 
     def setupBoundsAndScals(self):
         x_lb = np.concatenate(
-            [self.pos_lb, self.vel_lb, self.quat_lb, self.w_lb, self.thrust_lb, [0, 0]]
+            [self.pos_lb, self.vel_lb, self.quat_lb, self.w_lb, self.thrust_lb, [0, -0.1]]
         )
         x_ub = np.concatenate(
             [self.pos_ub, self.vel_ub, self.quat_ub, self.w_ub, self.thrust_ub, [1, 1]]
@@ -328,16 +271,16 @@ class MPCCppDynamics(DroneDynamics):
         self.slackStates = np.concatenate(
             [
                 self.state_indices["pos"],
+                self.state_indices["vel"],
+                self.state_indices["w"],
                 self.state_indices["progress"],
                 self.state_indices["dprogress"],
             ]
         )
-        self.nsx = len(self.slackStates)
 
         self.slackControls = np.concatenate(
             [self.control_indices["df"], self.control_indices["ddprogress"]]
         )
-        self.nsu = len(self.slackControls)
 
         self.x_lb = x_lb
         self.x_ub = x_ub
@@ -384,8 +327,8 @@ class MPCCppDynamics(DroneDynamics):
         # Progress rate weights
         self.Rdprogress = self.cost_info.get("Rdprogress", 1)
         # Define the cost function
-        self.stageCostFunc = self.MPCC_stage_cost(self.x, self.u, self.p)
-        self.terminalCostFunc = self.MPCC_stage_cost(self.x, self.u, self.p)  # use zero for u
+        self.stageCostFunc = self.MPCC_stage_cost
+        self.terminalCostFunc = self.MPCC_stage_cost  # use zero for u
 
     def MPCC_stage_cost(self, x, u, p, x_ref=None, u_ref=None):
         pos = x[self.state_indices["pos"]]
@@ -409,15 +352,15 @@ class MPCCppDynamics(DroneDynamics):
         # Contour error
         contour_err = pos_err - lag_err
         # contour_err = pos_err - ca.mtimes([lag_err, tangent_line])
-        contour_cost = ca.mtimes([contour_err.T, self.Qc, contour_err])
+        contour_cost = contour_err.T @ self.Qc @ contour_err
 
         # Body angular velocity cost
-        w_cost = ca.mtimes([w.T, self.Qw, w])
+        w_cost = w.T @ self.Qw @ w
 
         # Progress rate cost
-        dprogress_cost_L2 = ca.mtimes([dprogress.T, self.Rdprogress, dprogress])
+        dprogress_cost_L2 = dprogress.T @ self.Rdprogress @ dprogress
 
-        # Progress rate cost
+        # Negative progress rate cost
         dprogress_cost = -dprogress * self.Qmu
 
         # Thrust rate cost
@@ -427,7 +370,11 @@ class MPCCppDynamics(DroneDynamics):
         stage_cost = (
             lag_cost + contour_cost + w_cost + dprogress_cost + dprogress_cost_L2 + thrust_rate_cost
         )
-        stage_cost = ca.Function(
-            "stage_cost", [x, u, p], [stage_cost], ["x", "u", "p"], ["stage_cost"]
-        )
+
+        # Debugging statements
+        nan_elements = ca.fabs(stage_cost - stage_cost) > 0
+
+        if ca.sum1(nan_elements) > 0:
+            raise ValueError("NaN detected in stage cost computation.")
+
         return stage_cost
