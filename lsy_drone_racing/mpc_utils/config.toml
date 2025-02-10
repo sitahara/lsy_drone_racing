@@ -19,7 +19,7 @@ process_noise= 0.01 # std
 
 [cost_info] # Optimize through TurBO
 [cost_info.linear] # For linear least squares cost (all referenceTracking formulations)
-Qs_pos = 4 #4
+Qs_pos = 5 #4
 Qs_vel = 0.05
 Qs_rpy = 0.6
 Qs_drpy = 0.1 # 0.05
@@ -44,16 +44,16 @@ R_ddtheta = 0.01 # L2 dtheta weight
 
 [constraints_info]
 useObstacleConstraints = true
-obstacle_diameter = 0.23
-useTunnelConstraints = true # only for parametric hermite spline
-Wn = 0.9# Nominal Tunnel Width
-Wgate = 0.15 # Tunnel Width at gates, # Gate size: [0.45,0.45]
-tunnelTransitionMargin = 0.05 # Midpoint of the Tunnel Transition sigmoid
-tunnelTransitionSteepness = 1 # Steepness of the Tunnel Transition sigmoid
+obstacle_diameter = 0.20
+useTunnelConstraints = false # only for parametric hermite spline
+Wn = 0.8# Nominal Tunnel Width
+Wgate = 0.2 # Tunnel Width at gates, # Gate size: [0.45,0.45]
+tunnelTransitionMargin = 0.03 # Midpoint of the Tunnel Transition sigmoid
+tunnelTransitionSteepness = 100 # Steepness of the Tunnel Transition sigmoid
 
 [optimizer_info]
 useSoftConstraints = true
-softPenalty = 1e3
+softPenalty = 1e4
 useGP = false # Not finished yet
 useZoro = false # Not Implemented yet
 export_dir ="generated_code/mpc"
