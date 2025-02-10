@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 
 import casadi as ca
@@ -19,13 +20,22 @@ from .drone_dynamics import DroneDynamics
 
 
 class MPCCppDynamics(DroneDynamics):
-    def __init__(self, initial_obs, initial_info, dynamics_info, constraints_info, cost_info):
+    def __init__(
+        self,
+        initial_obs,
+        initial_info,
+        dynamics_info,
+        constraints_info,
+        cost_info,
+        pathPlanner=None,
+    ):
         super().__init__(
             initial_obs,
             initial_info,
             dynamics_info=dynamics_info,
             constraints_info=constraints_info,
             cost_info=cost_info,
+            pathPlanner=pathPlanner,
         )
         self.Wn = self.constraints_info.get("Wn", 0.3)
         self.Wgate = self.constraints_info.get("Wgate", 0.1)

@@ -13,47 +13,170 @@ class TestHermiteSpline(unittest.TestCase):
         self.gate_orientations = np.array(
             [[0.0, 0.0, 2.35], [0.0, 0.0, -0.78], [0.0, 0.0, 0.0], [0.0, 0.0, 3.14]]
         )
+        self.new_gate_positions = self.gate_positions + np.random.normal(0, 0.2, (4, 3))
         self.start_position = np.array([1.0, 1.0, 0.05])
         self.start_orientation = np.array([0, 0, 0])
         self.theta = ca.SX.sym("theta")
 
-    # def test_plot_polynomial(self):
-    #     path = HermiteSpline(
-    #         self.theta,
-    #         self.start_position,
-    #         self.start_orientation,
-    #         self.gate_positions,
-    #         self.gate_orientations,
-    #     )
+    def test_plot_parametric_path(self):
+        waypoints = np.vstack(
+            (self.start_position, self.gate_positions, self.start_position)
+        )  # , start_pos))
+        orientations = np.vstack(
+            (self.start_orientation, self.gate_orientations, self.start_orientation)
+        )  # , start_rpy))
+        path = HermiteSpline(
+            self.start_position,
+            self.start_orientation,
+            self.gate_positions,
+            self.gate_orientations,
+            parametric=True,
+        )
+        tangents = path.compute_normals(orientations)
+        param_values = np.concatenate((waypoints.flatten(), tangents.flatten()))
 
-    #     path_samples = path.fitPolynomial()
+        path_func = path.path_function
+        dpath_func = path.dpath_function
 
-    #     fig = plt.figure()
-    #     ax = fig.add_subplot(111, projection="3d")
-    #     ax.plot(path_samples[:, 0], path_samples[:, 1], path_samples[:, 2], label="Planned Path")
-    #     ax.scatter(
-    #         self.start_position[0],
-    #         self.start_position[1],
-    #         self.start_position[2],
-    #         color="red",
-    #         label="Start Position",
-    #     )
-    #     ax.scatter(
-    #         self.gate_positions[:, 0],
-    #         self.gate_positions[:, 1],
-    #         self.gate_positions[:, 2],
-    #         color="blue",
-    #         label="Gate Positions",
-    #     )
-    #     ax.set_xlabel("X")
-    #     ax.set_ylabel("Y")
-    #     ax.set_zlabel("Z")
-    #     ax.legend()
-    #     plt.show()
+        theta_values = np.linspace(0, 0.9, 1000)
+        path_points = np.array(
+            [
+                path_func(theta=theta, path_params=param_values)["path"].full().flatten()
+                for theta in theta_values
+            ]
+        )
+        dpath_points = np.array(
+            [dpath_func(theta, param_values).full().flatten() for theta in theta_values]
+        )
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot(
+            path_points[:, 0], path_points[:, 1], path_points[:, 2], label="Hermite Spline Path"
+        )
+        ax.scatter(
+            self.gate_positions[:, 0],
+            self.gate_positions[:, 1],
+            self.gate_positions[:, 2],
+            color="red",
+            label="Gates",
+        )
+        ax.scatter(
+            self.start_position[0],
+            self.start_position[1],
+            self.start_position[2],
+            color="blue",
+            label="Start",
+        )
+        for i in range(len(self.gate_positions)):
+            ax.quiver(
+                waypoints[i, 0],
+                waypoints[i, 1],
+                waypoints[i, 2],
+                tangents[i, 0],
+                tangents[i, 1],
+                tangents[i, 2],
+                length=0.1,
+                color="red",
+                label="Gate Tangents" if i == 0 else "",
+            )
+
+        ax.legend()
+        plt.show()
+
+    def test_compare_path_points(self):
+        path1 = HermiteSpline(
+            self.start_position,
+            self.start_orientation,
+            self.gate_positions,
+            self.gate_orientations,
+            parametric=True,
+        )
+        path2 = HermiteSpline(
+            self.start_position,
+            self.start_orientation,
+            self.gate_positions,
+            self.gate_orientations,
+            parametric=False,
+        )
+        param_values = path1.path_params_values
+
+        path_func1 = path1.path_function
+        path_func2 = path2.path_function
+        theta_values = np.linspace(0, 0.9, 1000)
+        path_points1 = np.array(
+            [
+                path_func1(theta=theta, path_params=param_values)["path"].full().flatten()
+                for theta in theta_values
+            ]
+        )
+        path_points2 = np.array(
+            [path_func2(theta=theta)["path"].full().flatten() for theta in theta_values]
+        )
+
+        path1.updateGates(self.new_gate_positions, self.gate_orientations)
+        path2.updateGates(self.new_gate_positions, self.gate_orientations)
+        param_values = path1.path_params_values
+        path_func2 = path2.path_function
+        path_points1_new = np.array(
+            [
+                path_func1(theta=theta, path_params=param_values)["path"].full().flatten()
+                for theta in theta_values
+            ]
+        )
+        path_points2_new = np.array(
+            [path_func2(theta=theta)["path"].full().flatten() for theta in theta_values]
+        )
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot(path_points1[:, 0], path_points1[:, 1], path_points1[:, 2], label="Parametric Path")
+        ax.plot(
+            path_points2[:, 0], path_points2[:, 1], path_points2[:, 2], label="Nonparametric Path"
+        )
+        ax.plot(
+            path_points1_new[:, 0],
+            path_points1_new[:, 1],
+            path_points1_new[:, 2],
+            label="Parametric Path New",
+        )
+        ax.plot(
+            path_points2_new[:, 0],
+            path_points2_new[:, 1],
+            path_points2_new[:, 2],
+            label="Nonparametric Path New",
+        )
+        ax.scatter(
+            self.gate_positions[:, 0],
+            self.gate_positions[:, 1],
+            self.gate_positions[:, 2],
+            color="red",
+            label="Gates",
+        )
+        ax.scatter(
+            self.new_gate_positions[:, 0],
+            self.new_gate_positions[:, 1],
+            self.new_gate_positions[:, 2],
+            color="green",
+            label="New Gates",
+        )
+        ax.scatter(
+            self.start_position[0],
+            self.start_position[1],
+            self.start_position[2],
+            color="blue",
+            label="Start",
+        )
+        ax.legend()
+        plt.show()
+        assert np.allclose(path_points1, path_points2)
 
     def test_plot_path(self):
         path = HermiteSpline(
-            self.start_position, self.start_orientation, self.gate_positions, self.gate_orientations
+            self.start_position,
+            self.start_orientation,
+            self.gate_positions,
+            self.gate_orientations,
+            parametric=False,
         )
         waypoints = path.waypoints
         tangents = path.tangents
@@ -66,7 +189,8 @@ class TestHermiteSpline(unittest.TestCase):
         ax = fig.add_subplot(111, projection="3d")
 
         # Evaluate the path at intervals
-        theta_values = np.linspace(0, 0.8, 1000)
+        theta_values = np.linspace(0, 0.9, 1000)
+
         path_points = np.array([path_func(theta).full().flatten() for theta in theta_values])
         dpath_points = np.array([dpath_func(theta).full().flatten() for theta in theta_values])
 
@@ -87,20 +211,7 @@ class TestHermiteSpline(unittest.TestCase):
             color="blue",
             label="Start",
         )
-        # Add tangents at the path points to the plot
-        # for i in range(len(path_points)):
-        #     ax.quiver(
-        #         path_points[i, 0],
-        #         path_points[i, 1],
-        #         path_points[i, 2],
-        #         dpath_points[i, 0],
-        #         dpath_points[i, 1],
-        #         dpath_points[i, 2],
-        #         length=0.1,
-        #         color="green",
-        #         label="Path Tangents" if i == 0 else "",
-        #     )
-        # gate_normals = path.compute_normals(self.gate_orientations)
+
         for i in range(len(self.gate_positions)):
             ax.quiver(
                 waypoints[i, 0],

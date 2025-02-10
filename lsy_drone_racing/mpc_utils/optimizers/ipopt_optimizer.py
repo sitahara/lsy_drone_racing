@@ -1,3 +1,4 @@
+from __future__ import annotations
 import casadi as ca
 import numpy as np
 import scipy
@@ -25,6 +26,7 @@ class IPOPTOptimizer(BaseOptimizer):
         X_ub = opti.parameter(self.nx, 1)  # State upper bound
         U_lb = opti.parameter(self.nu, 1)  # Control lower bound
         U_ub = opti.parameter(self.nu, 1)  # Control upper bound
+
         if self.useSoftConstraints:
             s_x = opti.variable(self.nx, self.n_horizon + 1)  # Slack for state constraints
             s_u = opti.variable(self.nu, self.n_horizon)  # Slack for control constraints
@@ -43,7 +45,7 @@ class IPOPTOptimizer(BaseOptimizer):
         for k in range(self.n_horizon):
             xn = self.dynamics.fd(x=X[:, k], u=U[:, k])["xn"]
             opti.subject_to(X[:, k + 1] == xn)
-        # State/Control constraints with slack variables (no slack for certain states/controls)
+        # State/Control bounds with slack variables (no slack for certain states/controls)
         for i in range(self.n_horizon + 1):
             for k in range(self.nx):
                 if k in self.dynamics.slackStates:
@@ -57,6 +59,13 @@ class IPOPTOptimizer(BaseOptimizer):
                     opti.subject_to(opti.bounded(U_lb - s_u[k, i], U[:, i], U_ub + s_u[k, i]))
                 else:
                     opti.subject_to(opti.bounded(U_lb[k], U[k, i], U_ub[k]))
+        # Nonlinear constraints
+        # nl_constr = self.dynamics.nl_constr
+        # nl_constr_func = ca.Function("nl_constr_func", [X, U], [nl_constr])
+        # nl_constr_lh = self.dynamics.nl_constr_lh
+        # nl_constr_uh = self.dynamics.nl_constr_uh
+
+        # opti.subject_to(opti.bounded(nl_constr_lh, nl_constr_func(X, U), nl_constr_uh))
 
         ### Costs (All cost functions have args: x,u,p,x_ref,u_ref)
         cost = 0
@@ -80,10 +89,10 @@ class IPOPTOptimizer(BaseOptimizer):
 
         # Solver options
         opts = {
-            "ipopt.print_level": self.solver_options.get("ipopt.print_level", 0),
-            "ipopt.tol": self.solver_options.get("ipopt.tol", 1e-4),
-            "ipopt.max_iter": self.solver_options.get("ipopt.max_iter", 25),
-            "ipopt.linear_solver": self.solver_options.get("ipopt.linear_solver", "mumps"),
+            "ipopt.print_level": self.solver_options.get("print_level", 0),
+            "ipopt.tol": self.solver_options.get("tol", 1e-4),
+            "ipopt.max_iter": self.solver_options.get("max_iter", 25),
+            "ipopt.linear_solver": self.solver_options.get("linear_solver", "mumps"),
         }
         opti.solver("ipopt", opts)
 
@@ -140,10 +149,7 @@ class IPOPTOptimizer(BaseOptimizer):
         opti.set_value(X_ub, self.dynamics.x_ub)
         opti.set_value(U_lb, self.dynamics.u_lb)
         opti.set_value(U_ub, self.dynamics.u_ub)
-        # print("X_lb: ", self.dynamics.x_lb)
-        # print("X_ub: ", self.dynamics.x_ub)
-        # print("U_lb: ", self.dynamics.u_lb)
-        # print("U_ub: ", self.dynamics.u_ub)
+
         # raise Exception("Stop here")
         # Set initial guess
         if self.x_guess is None or self.u_guess is None:

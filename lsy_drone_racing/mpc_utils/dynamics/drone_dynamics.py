@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 
 import casadi as ca
@@ -63,6 +64,7 @@ class DroneDynamics(BaseDynamics):
         dynamics_info: dict,
         constraints_info: dict,
         cost_info: dict,
+        pathPlanner: HermiteSpline = None,
     ):
         """Initialization of the dynamics constraints.
 
@@ -70,6 +72,10 @@ class DroneDynamics(BaseDynamics):
             initial_obs: The initial observation of the environment's state.
             initial_info: Additional environment information from the reset.
             dynamics_info: Additional information for the dynamics setup.
+            constraints_info: Constraints information for the dynamics.
+            cost_info: Cost information for the dynamics.
+            pathPlanner: Instance of HermiteSpline for path planning.
+
         Methods:
             setup_nominal_parameters: Setup the unchanging parameters of the drone/environment controller.
             setup_base_bounds: Setup the unchanging bounds of the drone/environment controller.
@@ -138,15 +144,10 @@ class DroneDynamics(BaseDynamics):
             raise ValueError("Currently only Mellinger or Thrust interfaces are supported.")
 
         self.baseDynamics = dynamics_info.get("dynamicsType", "Euler")
-        if self.baseDynamics not in ["Euler", "Quaternion", "MPCC", "system_id"]:
+        if self.baseDynamics not in ["Euler", "Quaternion", "system_id"]:
             raise ValueError(
-                "Currently only Euler, Quaternion, system_id, and MPCC formulations are supported."
+                "Currently only Euler, Quaternion, and system_id formulations are supported."
             )
-
-        if self.baseDynamics == "MPCC":
-            onlyBaseInit = True
-        else:
-            onlyBaseInit = False
 
         self.controlType = dynamics_info.get("controlType", "Thrusts")
         if self.controlType not in ["Thrusts", "Torques", "RPMs"]:
@@ -155,15 +156,9 @@ class DroneDynamics(BaseDynamics):
             )
 
         self.useControlRates = dynamics_info.get("useControlRates", False)
-        self.useAngVel = dynamics_info.get("useAngVel", True)
-        if not self.useAngVel:
-            self.useAngVel = True
-            raise Warning("Currently only useAngVel=True is supported.")
 
         self.useDrags = dynamics_info.get("useDrags", False)
 
-        # Constraints
-        self.useObstacleConstraints = constraints_info.get("useObstacleConstraints", True)
         # Initial values of the obstacles and gates
         self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
         self.obstacle_diameter = self.constraints_info.get("obstacle_diameter", 0.1)
@@ -172,50 +167,51 @@ class DroneDynamics(BaseDynamics):
         self.gates_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
         self.gates_visited = self.initial_obs.get("gates_visited", np.zeros((4,)))
 
-        # Used for the control rates and the prediction
-        self.last_u = None
         # Setup basic parameters, dynamics, bounds, scaling, and constraints
         self.setupNominalParameters()
         self.setupBaseBounds()
 
+        self.last_thrusts = np.zeros((4,))
+
         # Casadi parameter vector for the optimization problem
-        self.param_values = None
         self.p = None
         # Dict that maps the parameter names to their indices
         self.param_indices = {}
         # Current index of the parameters
         self.current_param_index = 0
-        # casadi vector of all non-linear constraints
-        self.nl_constr = None
-        # Dict of all non-linear constraints
-        self.nl_constr_indices = {}
-        # Current index of the non-linear constraints
-        self.current_nl_constr_index = 0
+
         # Init the path Planner
-        self.pathPlanner = HermiteSpline(
-            initial_obs["pos"],
-            initial_obs["rpy"],
-            initial_obs["gates_pos"],
-            initial_obs["gates_rpy"],
-        )
-        if not onlyBaseInit:
-            if self.baseDynamics == "system_id":
-                self.last_ftot = None
-                self.baseSystemIDDynamics()
-                self.setupSystemIDBounds()
-            else:
-                if self.baseDynamics == "Euler":
-                    self.baseEulerDynamics()
-                elif self.baseDynamics == "Quaternion":
-                    # self.testQuaternionDynamics()
-                    self.baseQuaternionDynamics()
-                self.setupBoundsAndScals()
-            self.setupNLConstraints()
+        if pathPlanner is not None:
+            self.pathPlanner = pathPlanner
+            if self.pathPlanner.parametric:
+                self.addToParameters(self.pathPlanner.path_params, "path")
+        else:
+            self.pathPlanner = None
+            self.useTunnelConstraints = False
+
+        if self.baseDynamics == "system_id":
+            self.baseSystemIDDynamics()
+            self.setupSystemIDBounds()
+        else:
+            if self.baseDynamics == "Euler":
+                self.baseEulerDynamics()
+            elif self.baseDynamics == "Quaternion":
+                self.baseQuaternionDynamics()
+            self.setupBoundsAndScals()
+        # Setup the nonlinear constraints
+        self.setupNLConstraints()
+        # Setup the Cost function
+        if cost_info.get("cost_type", "linear") == "linear":
             self.setupLinearCosts()
-            self.updateParameters(init=True)
-            self.setupCasadiFunctions()
-            if self.ukf_info["useUKF"]:
-                self.initUKF()
+        else:
+            self.setupMPCCCosts()
+        # Initialize Parameters
+        self.updateParameters(init=True)
+        # Setup the casadi functions
+        self.setupCasadiFunctions()
+        # Setup the UKF (Unscented Kalman Filter)
+        if self.ukf_info["useUKF"]:
+            self.initUKF()
 
     def setupCasadiFunctions(self):
         """Setup explicit, implicit, and discrete dynamics functions."""
@@ -237,76 +233,57 @@ class DroneDynamics(BaseDynamics):
     def transformState(self, x: np.ndarray) -> np.ndarray:
         """Transforms observations from the environment to the respective states used in the dynamics."""
         # Extract the position, velocity, euler angles, and angular velocities
-        if self.ukf_info["useUKF"]:
+
+        if hasattr(self, "last_thrusts") and (self.ukf_info["useUKF"]):
             # x1 = x
-            x = self.runUKF(z=x, u=self.last_u)
+            x = self.runUKF(z=x, u=self.last_thrusts)
             # print("UKF State Changes", x - x1)
         pos = x[:3]
         vel = x[3:6]
         rpy = x[6:9]
         drpy = x[9:12]
-        # Convert to used states
         w = W1(rpy) @ drpy
+
+        if not hasattr(self, "next_predicted_states") or self.next_predicted_states is None:
+            self.next_predicted_states = np.zeros(self.nx)
+
         if self.baseDynamics == "Euler":
-            x = np.concatenate([pos, vel, rpy, w])
+            x = self.next_predicted_states
+            x[:12] = np.concatenate([pos, vel, rpy, w])
         elif self.baseDynamics == "Quaternion":
+            x = self.next_predicted_states
             quat = Rot.from_euler("xyz", rpy).as_quat()
-            x = np.concatenate([pos, vel, quat, w])
+            x[:13] = np.concatenate([pos, vel, quat, w])
         elif self.baseDynamics == "system_id":
-            if self.last_ftot is None:
-                self.last_ftot = 0
-            if self.last_u is None:
-                self.last_u = np.zeros(self.nu)
-            last_rpy_cmd = self.last_u[np.array([1, 2, 3])]
-            last_f_collective_cmd = self.last_u[0]
-            x = np.concatenate(
-                [
-                    pos,
-                    vel,
-                    rpy,
-                    [self.last_ftot],  # f_collective
-                    np.zeros(2),  # theta, v_theta
-                    last_rpy_cmd,  # rpy_cmd
-                    [last_f_collective_cmd],  # f_collective_cmd
-                ]
-            )
-            print("Current System ID State", x)
-            return x
-        # print("Transformed State", x)
-        # print("X_lb", self.x_lb)
-        # print("X_ub", self.x_ub)
-        if self.useControlRates:
-            if self.last_u is None:
-                self.last_u = self.u_eq
-            x = np.concatenate([x, self.last_u])
+            # States for the system identification model (pos, vel, rpy, ftot, theta, dtheta, ftot_cmd, rpy_cmd)
+            # Controls for the system identification model (dftot_cmd, drpy_cmd, ddtheta_cmd)
+
+            # Theta, dtheta, ddtheta are currently not used
+            x = self.next_predicted_states
+            x[:9] = np.concatenate([pos, vel, rpy])
+            # print("System ID theta", x[self.state_indices["theta"]])
         # Predict the state into the future if self.usePredict is True
-        if self.usePredict and self.last_u is not None:
+        if self.usePredict:
             # fd_predict is a discrete dynamics function (RK4) with the time step t_predict
-            x = self.fd_predict(x, self.last_u)
-        # print(x)
+            x = self.fd_predict(x, self.last_thrusts)
         return x
 
     def transformAction(self, x_sol: np.ndarray, u_sol: np.ndarray) -> np.ndarray:
         """Transforms optimizer solutions to controller interfaces (Mellinger or Thrust)."""
+        self.next_predicted_states = x_sol[:, 1]
+        self.current_controls = u_sol[:, 0]
 
-        if self.useControlRates:
-            self.last_u = x_sol[self.state_indices["u"], 1]
-        else:
-            self.last_u = u_sol[:, 0]
         if self.baseDynamics == "system_id":
-            self.last_ftot = x_sol[self.state_indices["f_collective"], 1]
-
-            tot_thrust = x_sol[self.state_indices["f_collective_cmd"], 1]
+            tot_thrust = x_sol[self.state_indices["ftot_cmd"], 1]
             desired_rpy = x_sol[self.state_indices["rpy_cmd"], 1]
             action = np.concatenate([[tot_thrust], desired_rpy])
-            print("Thrust/Euler desired", action)
-            self.last_u = action
-            return action.flatten()
-        if self.interface == "Thrust":
+            # print("Thrust/Euler desired", action)
+            self.last_action = action
+        elif self.interface == "Thrust":
             if self.useControlRates:
-                action = x_sol[self.state_indices["u"], 1]
+                controls = x_sol[self.state_indices["u"], 1]
             else:
-                action = u_sol[:, 0]
+                controls = u_sol[:, 0]
 
             if self.baseDynamics == "Euler":
                 rpy = x_sol[self.state_indices["rpy"], 1]
@@ -315,13 +292,13 @@ class DroneDynamics(BaseDynamics):
                 rpy = Rot.from_quat(quat).as_euler("xyz")
 
             if self.controlType == "Torques":
-                tot_thrust = action[0]
+                tot_thrust = controls[0]
             elif self.controlType == "RPMs":
-                tot_thrust = self.ct * np.sum(action**2)
+                tot_thrust = self.ct * np.sum(controls**2)
             elif self.controlType == "Thrusts":
-                tot_thrust = np.sum(action)
+                tot_thrust = np.sum(controls)
             action = np.concatenate([[tot_thrust], rpy])
-            print("Thrust/Euler desired", action)
+            # print("Thrust/Euler desired", action)
         elif self.interface == "Mellinger":
             action = x_sol[:, 1]
             pos = action[self.state_indices["pos"]]
@@ -335,7 +312,6 @@ class DroneDynamics(BaseDynamics):
                 rpy = Rot.from_quat(quat).as_euler("xyz")
             yaw = rpy[-1]
             acc_world = (vel - x_sol[self.state_indices["vel"], 0]) / self.ts
-            # acc_world = np.zeros(3)
 
             drpy = W2(rpy) @ w
             action = np.concatenate([pos, vel, acc_world, [yaw], drpy])
@@ -376,128 +352,62 @@ class DroneDynamics(BaseDynamics):
             "params_roll_rate": [[-3.960889336015948], [4.078293254657104]],
             "params_yaw_rate": [[-0.005347588299390372], [0.0]],
             "params_acc": [20.907574256269616, 3.653687545690674],
-            "input_indices": ["CMD_THRUST", "CMD_ROLL", "CMD_YAW", "CMD_PITCH"],
-            "output_indices": ["PITCH_RATE", "ROLL_RATE", "YAW_RATE", "ACC_X", "ACC_Y", "ACC_Z"],
-            "data_file": "/home/haocheng/Experiments/figure_8/merge_smoothed.csv",
-            "smooth_indices": [
-                "POS_X",
-                "POS_Y",
-                "POS_Z",
-                "ROLL",
-                "PITCH",
-                "YAW",
-                "VEL_X",
-                "VEL_Y",
-                "VEL_Z",
-                "ROLL_RATE",
-                "PITCH_RATE",
-                "YAW_RATE",
-                "CMD_THRUST",
-                "CMD_ROLL",
-                "CMD_PITCH",
-                "CMD_YAW",
-            ],
         }
-
-        px = ca.MX.sym("px")
-        py = ca.MX.sym("py")
-        pz = ca.MX.sym("pz")
-        vx = ca.MX.sym("vx")
-        vy = ca.MX.sym("vy")
-        vz = ca.MX.sym("vz")
-        r = ca.MX.sym("r")
-        p = ca.MX.sym("p")
-        y = ca.MX.sym("y")
-        f_collective = ca.MX.sym("f_collective")
-        f_collective_cmd = ca.MX.sym("f_collective_cmd")
-        r_cmd = ca.MX.sym("r_cmd")
-        p_cmd = ca.MX.sym("p_cmd")
-        y_cmd = ca.MX.sym("y_cmd")
+        pos = ca.MX.sym("pos", 3)
+        vel = ca.MX.sym("vel", 3)
+        rpy = ca.MX.sym("rpy", 3)
+        ftot = ca.MX.sym("ftot")
+        ftot_cmd = ca.MX.sym("ftot_cmd")
+        rpy_cmd = ca.MX.sym("rpy_cmd", 3)
         # NEW
         theta = ca.MX.sym("theta")
-        v_theta = ca.MX.sym("v_theta")
-        delta_v_theta = ca.MX.sym("delta_v_theta")
-        delta_f_collective_cmd = ca.MX.sym("delta_f_collective_cmd")
-        delta_r_cmd = ca.MX.sym("r_cmd")
-        delta_p_cmd = ca.MX.sym("p_cmd")
-        delta_y_cmd = ca.MX.sym("y_cmd")
+        dtheta = ca.MX.sym("dtheta")
+        ddtheta = ca.MX.sym("ddtheta")
+        dftot_cmd = ca.MX.sym("dftot_cmd")
+        drpy_cmd = ca.MX.sym("drpy_cmd", 3)
         self.state_indices = {
             "pos": np.arange(0, 3),
             "vel": np.arange(3, 6),
             "rpy": np.arange(6, 9),
-            "f_collective": 9,
+            "ftot": 9,
             "theta": 10,
-            "v_theta": 11,
-            "rpy_cmd": np.arange(12, 15),
-            "f_collective_cmd": 15,
+            "dtheta": 11,
+            "ftot_cmd": 12,
+            "rpy_cmd": np.arange(13, 16),
         }
-        self.control_indices = {
-            "df_collective_cmd": 0,
-            "drpy_cmd": np.arange(1, 4),
-            "ddtheta_cmd": 4,
-        }
+        self.control_indices = {"dftot_cmd": 0, "drpy_cmd": np.arange(1, 4), "ddtheta_cmd": 4}
 
         # define state and input vector
-        x = ca.vertcat(
-            px,
-            py,
-            pz,
-            vx,
-            vy,
-            vz,
-            r,
-            p,
-            y,
-            f_collective,
-            theta,
-            v_theta,
-            r_cmd,
-            p_cmd,
-            y_cmd,
-            f_collective_cmd,
-        )
-        u = ca.vertcat(delta_f_collective_cmd, delta_r_cmd, delta_p_cmd, delta_y_cmd, delta_v_theta)
+        x = ca.vertcat(pos, vel, rpy, ftot, theta, dtheta, ftot_cmd, rpy_cmd)
+        u = ca.vertcat(dftot_cmd, drpy_cmd, ddtheta)
         # Define nonlinear system dynamics
         dx = ca.vertcat(
-            vx,
-            vy,
-            vz,
-            (
-                self.system_id_info["params_acc"][0] * f_collective
-                + self.system_id_info["params_acc"][1]
-            )
-            * (ca.cos(r) * ca.sin(p) * ca.cos(y) + ca.sin(r) * ca.sin(y)),
-            (
-                self.system_id_info["params_acc"][0] * f_collective
-                + self.system_id_info["params_acc"][1]
-            )
-            * (ca.cos(r) * ca.sin(p) * ca.sin(y) - ca.sin(r) * ca.cos(y)),
-            (
-                self.system_id_info["params_acc"][0] * f_collective
-                + self.system_id_info["params_acc"][1]
-            )
-            * ca.cos(r)
-            * ca.cos(p)
+            vel,
+            (self.system_id_info["params_acc"][0] * ftot + self.system_id_info["params_acc"][1])
+            * (ca.cos(rpy[0]) * ca.sin(rpy[1]) * ca.cos(rpy[2]) + ca.sin(rpy[0]) * ca.sin(rpy[2])),
+            (self.system_id_info["params_acc"][0] * ftot + self.system_id_info["params_acc"][1])
+            * (ca.cos(rpy[0]) * ca.sin(rpy[1]) * ca.sin(rpy[2]) - ca.sin(rpy[0]) * ca.cos(rpy[2])),
+            (self.system_id_info["params_acc"][0] * ftot + self.system_id_info["params_acc"][1])
+            * ca.cos(rpy[0])  # Changed from `ca.cos(r)`
+            * ca.cos(rpy[1])  # Changed from `ca.cos(p)`
             - self.g,
             (
-                self.system_id_info["params_roll_rate"][0] * r
-                + self.system_id_info["params_roll_rate"][1] * r_cmd
+                self.system_id_info["params_roll_rate"][0] * rpy[0]
+                + self.system_id_info["params_roll_rate"][1] * rpy_cmd[0]
             ),
             (
-                self.system_id_info["params_pitch_rate"][0] * p
-                + self.system_id_info["params_pitch_rate"][1] * p_cmd
+                self.system_id_info["params_pitch_rate"][0] * rpy[1]
+                + self.system_id_info["params_pitch_rate"][1] * rpy_cmd[1]
             ),
             (
-                self.system_id_info["params_yaw_rate"][0] * y
-                + self.system_id_info["params_yaw_rate"][1] * y_cmd
+                self.system_id_info["params_yaw_rate"][0] * rpy[2]
+                + self.system_id_info["params_yaw_rate"][1] * rpy_cmd[2]
             ),
-            10.0 * (f_collective_cmd - f_collective),
-            v_theta,
-            delta_v_theta,
-            delta_r_cmd,
-            delta_p_cmd,
-            delta_y_cmd,
-            delta_f_collective_cmd,
+            10.0 * (ftot_cmd - ftot),
+            dtheta,
+            ddtheta,
+            dftot_cmd,
+            drpy_cmd,
         )
         self.x = x
         self.dx = dx
@@ -575,43 +485,6 @@ class DroneDynamics(BaseDynamics):
         self.x = x
         self.nx = x.size()[0]
         self.dx = dx
-        self.nu = self.u.size()[0]
-        self.ny = self.nx + self.nu
-
-    def testQuaternionDynamics(self):
-        self.modelName = self.controlType + self.baseDynamics + self.interface
-        pos = ca.MX.sym("pos", 3)
-        vel = ca.MX.sym("vel", 3)
-        quat = ca.MX.sym("quat", 4)
-        w = ca.MX.sym("w", 3)
-        self.state_indices = {
-            "pos": np.arange(0, 3),
-            "vel": np.arange(3, 6),
-            "quat": np.arange(6, 10),
-            "w": np.arange(10, 13),
-        }
-        x_eq = np.zeros((13,))
-
-        f = ca.MX.sym("f", 4)
-        u_eq = 0.25 * self.mass * self.g * np.ones((4,))
-        torques = self.thrustsToTorques_sym(f)
-        thrust_total = ca.sum1(f)
-
-        thrust_vec = ca.vertcat(0, 0, (thrust_total) / self.mass)
-        Rquat = quaternion_to_rotation_matrix(quat)
-
-        dpos = vel
-        dvel = self.gv + Rquat @ thrust_vec
-        dquat = 0.5 * quaternion_product(quat, ca.vertcat(w, 0))
-        dw = self.J_inv @ (torques - (ca.cross(w, self.J @ w)))
-
-        self.control_indices = {"u": np.arange(0, 4)}
-        self.x = ca.vertcat(pos, vel, quat, w)
-        self.dx = ca.vertcat(dpos, dvel, dquat, dw)
-        self.u = f
-        self.x_eq = x_eq
-        self.u_eq = u_eq
-        self.nx = self.x.size()[0]
         self.nu = self.u.size()[0]
         self.ny = self.nx + self.nu
 
@@ -694,12 +567,28 @@ class DroneDynamics(BaseDynamics):
 
     def setupNLConstraints(self):
         """Setup the basic constraints for the drone/environment controller. Each constraint setup appends the constraints to the existing constraints and extends the parameter vector when needed."""
+        # casadi vector of all non-linear constraints
+        self.nl_constr = None
+        # Dict of all non-linear constraints
+        self.nl_constr_indices = {}
+        # Current index of the non-linear constraints
+        self.current_nl_constr_index = 0
+
+        self.useObstacleConstraints = self.constraints_info.get("useObstacleConstraints", True)
+        self.useTunnelConstraints = self.constraints_info.get("useTunnelConstraints", False)
+        self.tunnelTransitionMargin = self.constraints_info.get("tunnelTransitionMargin", 0.1)
+        self.tunnelTransitionSteepness = self.constraints_info.get("tunnelTransitionSteepness", 10)
+        self.Wn = self.constraints_info.get("Wn", 0.3)
+        self.Wgate = self.constraints_info.get("Wgate", 0.2)
         if self.baseDynamics == "Quaternion":
             # Norm and euler angle constraints
             self.setupQuatConstraints()
         if self.useObstacleConstraints:
             # Obstacle constraints
             self.setupObstacleConstraints()
+        if self.useTunnelConstraints and self.pathPlanner.parametric:
+            # Tunnel constraints
+            self.setupTunnelConstraints()
 
     def setupLinearCosts(self):
         """Setup the linear (Quadratic) costs of form: (sum_i ||x_i-x_ref_i||_{Qs}^2 + ||u_i-u_ref_i||_{R}^2) + ||x_N-x_ref_N||_{Qt}^2."""
@@ -735,33 +624,37 @@ class DroneDynamics(BaseDynamics):
         Qs_quat = np.array([Qs_quat, Qs_quat, Qs_quat, Qs_quat])
         Qt_quat = np.array([Qt_quat, Qt_quat, Qt_quat, Qt_quat])
 
-        Rs = self.cost_info.get("Rs", 0.01)
-        Rs = np.array([Rs, Rs, Rs, Rs])
-        Rd = self.cost_info.get("Rd", 0.01)
-        Rd = np.array([Rd, Rd, Rd, Rd])
+        R_f = self.cost_info.get("R_f", 0.1)
+        R_f = np.array([R_f, R_f, R_f, R_f])
+        R_df = self.cost_info.get("R_df", 0.01)
+        R_df = np.array([R_df, R_df, R_df, R_df])
 
         if self.baseDynamics == "Euler":
             Qs = np.concatenate([Qs_pos, Qs_vel, Qs_rpy, Qs_drpy])
             Qt = np.concatenate([Qt_pos, Qt_vel, Qt_rpy, Qt_drpy])
+            if self.useControlRates:
+                Qs = np.concatenate([Qs, R_f])
+                Qt = np.concatenate([Qt, R_f])
+                R = R_df
+            else:
+                R = R_f
         elif self.baseDynamics == "Quaternion":
             Qs = np.concatenate([Qs_pos, Qs_vel, Qs_quat, Qs_drpy])
             Qt = np.concatenate([Qt_pos, Qt_vel, Qt_quat, Qt_drpy])
+            if self.useControlRates:
+                Qs = np.concatenate([Qs, R_f])
+                Qt = np.concatenate([Qt, R_f])
+                R = R_df
+            else:
+                R = R_f
         elif self.baseDynamics == "system_id":
-            pass
+            # State: pos, vel, rpy, ftot, theta, dtheta, ftot_cmd, rpy_cmd
+            Qs = np.concatenate([Qs_pos, Qs_vel, Qs_rpy, [R_f[0]], np.zeros(2), [R_f[0]], Qs_rpy])
+            Qt = np.concatenate([Qt_pos, Qt_vel, Qt_rpy, [R_f[0]], np.zeros(2), [R_f[0]], Qt_rpy])
+            # Control: dftot_cmd, drpy_cmd, ddtheta_cmd
+            R = np.concatenate([[R_df[0]], Qs_drpy, np.zeros(1)])
         else:
             raise ValueError("Base dynamics not recognized.")
-
-        if self.useControlRates:
-            Qs = np.concatenate([Qs, Rs])
-            Qt = np.concatenate([Qt, Rs])
-            R = Rd
-        else:
-            R = Rs
-
-        if self.baseDynamics == "system_id":
-            Qs = np.concatenate([Qs_pos, Qs_vel, Qs_rpy, np.zeros(3), Qs_rpy, np.ones(1)])
-            Qt = Qs
-            R = np.ones((5,)) * 0.01
 
         self.Qs = np.diag(Qs)
         self.Qt = np.diag(Qt)
@@ -781,23 +674,114 @@ class DroneDynamics(BaseDynamics):
         """Compute the LQR cost."""
         return ca.mtimes([(x - x_ref).T, self.Qt, (x - x_ref)])
 
-    def updateParameters(self, obs: dict = None, init: bool = False) -> np.ndarray:
+    def setupMPCCCosts(self):
+        """Setup the MPCC costs."""
+        self.cost_type = "external"
+        # Lag error weights
+        Qs_l = self.cost_info.get("Qs_l", 1)
+        self.Qs_l = ca.diag([Qs_l, Qs_l, Qs_l])
+        # Contour error weights
+        Qs_c = self.cost_info.get("Qs_c", 1)
+        self.Qs_c = ca.diag([Qs_c, Qs_c, Qs_c])
+        # RPY weights
+        Qs_rpy = self.cost_info.get("Qs_rpy", 0.5)
+        self.Qs_rpy = ca.diag([Qs_rpy, Qs_rpy, Qs_rpy])
+        # Body Angular velocity weights
+        Qs_drpy = self.cost_info.get("Qs_drpy", 0.1)
+        self.Qs_drpy = ca.diag([Qs_drpy, Qs_drpy, Qs_drpy])
+        # L1 Progress rate weights
+        self.Q_dtheta = self.cost_info.get("Q_dtheta", 1)
+        # L2 Progress rate weights
+        self.R_dtheta = self.cost_info.get("R_dtheta", 0.01)
+
+        # Thrust weights
+        self.R_ftot = self.cost_info.get("R_f", 0.1)
+        self.R_dftot = self.cost_info.get("R_df", 0.01)
+        # Define the cost function
+        self.stageCostFunc = self.MPCC_stage_cost
+        self.terminalCostFunc = self.MPCC_stage_cost
+
+    def MPCC_stage_cost(self, x, u, p, x_ref=None, u_ref=None):
+        """Compute the MPCC cost."""
+        pos = x[self.state_indices["pos"]]
+        theta = x[self.state_indices["theta"]]
+        dtheta = x[self.state_indices["dtheta"]]
+        rpy = x[self.state_indices["rpy"]]
+        rpy_cmd = x[self.state_indices["rpy_cmd"]]
+        ftot = x[self.state_indices["ftot"]]
+        ftot_cmd = x[self.state_indices["ftot_cmd"]]
+
+        dftot_cmd = u[self.control_indices["dftot_cmd"]]
+        drpy_cmd = u[self.control_indices["drpy_cmd"]]
+        ddtheta_cmd = u[self.control_indices["ddtheta_cmd"]]
+
+        path_params = p[self.param_indices["path"]]
+        path_pos = self.pathPlanner.path_function(theta, path_params)
+        path_tangent = self.pathPlanner.dpath_function(theta, path_params)
+
+        pos_error = pos - path_pos
+        # Lag Cost
+        lag_error = ca.mtimes([ca.dot(path_tangent, pos_error), path_tangent])
+        lag_cost = ca.mtimes([lag_error.T, self.Qs_l, lag_error])
+        # Contour Cost
+        contour_error = pos_error - lag_error
+        contour_cost = ca.mtimes([contour_error.T, self.Qs_c, contour_error])
+        # (d)RPY Cost
+        rpy_cost = ca.mtimes([(rpy).T, self.Qs_rpy, rpy])
+        drpy_cost = ca.mtimes([drpy_cmd.T, self.Qs_drpy, drpy_cmd])
+        # Progress rate cost
+        dtheta_cost = -dtheta * self.Q_dtheta
+        ddtheta_cost = ddtheta_cmd * self.R_dtheta * ddtheta_cmd
+
+        # Total Thrust cost
+        # ftot_cost = ftot_cmd * self.R_ftot * ftot_cmd
+        dftot_cost = dftot_cmd * self.R_dftot * dftot_cmd
+        stage_cost = (
+            lag_cost + contour_cost + rpy_cost + drpy_cost + dtheta_cost + ddtheta_cost + dftot_cost
+        )
+        return stage_cost
+
+    def updateParameters(self, obs: dict = None, init: bool = False) -> bool:
         """Update the parameters of the drone/environment controller."""
         # Checks whether gate observation has been updated, replans if needed, and updates the path, dpath, and gate progresses parameters
         updated = False
         if init and self.p is not None:
             self.param_values = np.zeros((self.p.size()[0],))
-            self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
-                :, :-1
-            ].flatten()
-        elif self.p is not None:
-            if np.any(np.not_equal(self.obstacles_visited, obs["obstacles_visited"])):
+            if self.useObstacleConstraints:
+                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                    :, :-1
+                ].flatten()
+            if self.pathPlanner.parametric:
+                self.param_values[self.param_indices["path"]] = self.pathPlanner.path_params_values
+            if self.useTunnelConstraints:
+                self.param_values[self.param_indices["gate_thetas"]] = (
+                    self.pathPlanner.theta_switch[1 : self.gates_visited.size + 1]
+                )
+                self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
+            updated = True
+        elif obs is not None and self.p is not None:
+            if self.useObstacleConstraints and np.any(
+                np.not_equal(self.obstacles_visited, obs["obstacles_visited"])
+            ):
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
                 self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
                     :, :-1
                 ].flatten()
+                print("Obstacle positions updated")
                 updated = True
+            if self.pathPlanner.parametric and np.any(
+                np.not_equal(self.gates_visited, obs["gates_visited"])
+            ):
+                self.gates_visited = obs["gates_visited"]
+                self.gates_pos = obs["gates_pos"]
+                self.gates_rpy = obs["gates_rpy"]
+                self.pathPlanner.updateGates(self.gates_pos, self.gates_rpy)
+                self.param_values[self.param_indices["path"]] = self.pathPlanner.path_params_values
+                self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
+                updated = True
+                print("Gates positions updated")
+
         return updated
 
     def setupQuatConstraints(self):
@@ -817,22 +801,24 @@ class DroneDynamics(BaseDynamics):
         quat_constraints = ca.vertcat(quat_norm, quat_eul)
         self.addToConstraints(quat_constraints, quat_constraints_lh, quat_constraints_uh, "quat")
 
-    def addToConstraints(self, nl_const, lh, uh, nl_const_name):
+    def addToConstraints(
+        self, nl_constr: ca.MX, lh: np.ndarray, uh: np.ndarray, nl_const_name: str
+    ):
         """Add the non-linear constraints to the existing constraints."""
         if self.nl_constr is None:
-            self.nl_constr = nl_const
+            self.nl_constr = nl_constr
             self.nl_constr_lh = lh
             self.nl_constr_uh = uh
         else:
-            self.nl_constr = ca.vertcat(self.nl_constr, nl_const)
+            self.nl_constr = ca.vertcat(self.nl_constr, nl_constr)
             self.nl_constr_lh = np.concatenate([self.nl_constr_lh, lh])
             self.nl_constr_uh = np.concatenate([self.nl_constr_uh, uh])
         self.nl_constr_indices[nl_const_name] = np.arange(
-            self.current_nl_constr_index, lh.__len__()
+            self.current_nl_constr_index, self.current_nl_constr_index + len(lh)
         )
-        self.current_nl_constr_index += lh.__len__()
+        self.current_nl_constr_index += len(lh)
 
-    def addToParameters(self, param, param_name):
+    def addToParameters(self, param: ca.MX, param_name: str):
         """Add the parameters to the existing parameters."""
         if self.p is None:
             self.p = param
@@ -846,7 +832,6 @@ class DroneDynamics(BaseDynamics):
 
     def setupObstacleConstraints(self):
         """Setup the obstacle constraints for the drone/environment controller."""
-        # Obstacle constraints
         num_obstacles = self.obstacle_pos.shape[0]
         num_params_per_obstacle = 2
         num_params_obstacle = num_obstacles * num_params_per_obstacle
@@ -874,6 +859,69 @@ class DroneDynamics(BaseDynamics):
             obstacle_constraints, obstacle_constraints_lh, obstacle_constraints_uh, "obstacles"
         )
         self.addToParameters(obstacles_pos_sym, "obstacles_pos")
+        print("Obstacle constraints set up.")
+        return None
+
+    def setupTunnelConstraints(self):
+        theta = self.x[self.state_indices["theta"]]  # Progress state
+        pos = self.x[self.state_indices["pos"]]  # Position state
+
+        gate_thetas = ca.MX.sym("gate_thetas", self.gates_pos.shape[0])  # Progress of the gates
+        gates_pos_sym = ca.MX.sym("gates_pos", self.gates_pos.size)
+        self.addToParameters(gates_pos_sym, "gates_pos")
+        self.addToParameters(gate_thetas, "gate_thetas")
+
+        path = self.pathPlanner.path_function(
+            theta=theta, path_params=self.p[self.param_indices["path"]]
+        )["path"]
+        dpath = self.pathPlanner.dpath_function(
+            theta=theta, path_params=self.p[self.param_indices["path"]]
+        )["dpath"]
+
+        t = dpath / ca.norm_2(dpath)  # Normalized Tangent vector at the current progress
+        n = ca.vertcat(-t[1], t[0], 0)  # Normal vector at the current progress
+        b = ca.cross(t, n)  # Binormal vector at the current progress
+
+        def getTunnelWidth2(gates_pos_sym: ca.MX, pos: ca.MX) -> ca.MX:
+            """Calculate the tunnel width at the current progress."""
+            # Calculate the progress distance to the nearest gate
+            d = ca.MX.zeros(self.gates_pos.shape[0])
+            for k in range(self.gates_pos.shape[0]):
+                d[k] = ca.norm_2(gates_pos_sym[k * 3 : (k + 1) * 3] - pos)
+            dmin = ca.mmin(d)
+            sigmoid = 1 / (
+                1 + ca.exp(-self.tunnelTransitionSteepness * (dmin - self.tunnelTransitionMargin))
+            )
+            return self.Wn + (self.Wgate - self.Wn) * sigmoid
+
+        def getTunnelWidth(gate_thetas: ca.MX, theta: ca.MX) -> ca.MX:
+            """Calculate the tunnel width at the current progress."""
+            # Calculate the progress distance to the nearest gate
+            d = ca.mmin(ca.fabs(gate_thetas - theta))
+            sigmoid = 1 / (
+                1 + ca.exp(-self.tunnelTransitionSteepness * (d - self.tunnelTransitionMargin))
+            )
+            return self.Wn + (self.Wgate - self.Wn) * sigmoid
+
+        W = getTunnelWidth(gate_thetas, theta)
+        # W = getTunnelWidth2(gates_pos_sym, pos)
+        H = W
+        # Left-lower corner of the tunnel around the path
+        p0 = path - W * n - H * b
+        # Tunnel constraints
+        tunnel_constraints = []
+        tunnel_constraints.append((pos - p0).T @ n)
+        tunnel_constraints.append(2 * H - (pos - p0).T @ n)
+        tunnel_constraints.append((pos - p0).T @ b)
+        tunnel_constraints.append(2 * W - (pos - p0).T @ b)
+
+        tunnel_constraints_lh = np.zeros((len(tunnel_constraints),))
+        tunnel_constraints_uh = np.ones((len(tunnel_constraints))) * 1e9
+        tunnel_constraints = ca.vertcat(*tunnel_constraints)
+        self.addToConstraints(
+            tunnel_constraints, tunnel_constraints_lh, tunnel_constraints_uh, "tunnel"
+        )
+        print("Tunnel constraints set up.")
 
     def setupBaseBounds(self):
         """Setup the nominal and unchanging bounds of the drone/environment controller."""
@@ -887,18 +935,18 @@ class DroneDynamics(BaseDynamics):
         self.thrust_ub = self.ct * (rpm_ub**2) * np.ones((4,))
         self.tot_thrust_lb = np.sum(self.thrust_lb)
         self.tot_thrust_ub = np.sum(self.thrust_ub)
-        # print("total Thrust bounds", self.tot_thrust_lb, self.tot_thrust_ub)
-        # raise ValueError("Check the thrust bounds")
         # Individual rotor thrust rate limits
         rate_max = (
-            (self.thrust_ub[0] - self.thrust_lb[0]) / 0.5
-        )  # Assuming the motor can go from 0 to max thrust in 0.1s, loose bounds, only for control rate
+            (self.thrust_ub[0] - self.thrust_lb[0]) / 0.2
+        )  # Assuming the motor can go from 0 to max thrust in 0.2s, loose bounds, only for control rate
         self.thrust_rate_lb = -rate_max * np.ones((4,))
         self.thrust_rate_ub = rate_max * np.ones((4,))
+        self.tot_thrust_rate_lb = np.sum(self.thrust_rate_lb)
+        self.tot_thrust_rate_ub = np.sum(self.thrust_rate_ub)
         # State limits (from the observation space, )
         x_y_max = 3.0
         z_max = 2.5
-        z_min = 0.08  # 5 cm above the ground + 3cm to avoid hitting the ground
+        z_min = 0.10  # Drone starts ~5 cm above the ground + 5cm margin to avoid hitting the ground
         rpy_max = 75 / 180 * np.pi  # 85 degrees in radians, reduced to 75 for safety
         large_val = 1e2
         self.pos_lb = np.array([-x_y_max, -x_y_max, z_min]).T
@@ -911,41 +959,53 @@ class DroneDynamics(BaseDynamics):
         self.drpy_ub = np.array([large_val, large_val, large_val]).T
         self.w_lb = np.array([-large_val, -large_val, -large_val]).T
         self.w_ub = np.array([large_val, large_val, large_val]).T
-        # What are the bounds for the quaternions? Implemented as non-linear constraints
+        # Quaternion bounds are implemented as non-linear constraints. Define loose placeholder bounds here.
         self.quat_lb = -1e3 * np.ones((4,))
         self.quat_ub = 1e3 * np.ones((4,))
 
     def setupSystemIDBounds(self):
         """Setup the bounds for the system identification model."""
-        self.x_lb = np.concatenate(
-            [
-                self.pos_lb,
-                self.vel_lb,
-                self.rpy_lb,
-                [self.tot_thrust_lb],
-                [0],
-                [0],
-                self.rpy_lb,
-                [self.tot_thrust_lb],
-            ]
+        self.x_lb = np.zeros((self.nx,))
+        self.x_ub = np.zeros((self.nx,))
+        self.u_lb = np.zeros((self.nu,))
+        self.u_ub = np.zeros((self.nu,))
+        self.x_lb[self.state_indices["pos"]] = self.pos_lb
+        self.x_ub[self.state_indices["pos"]] = self.pos_ub
+        self.x_lb[self.state_indices["vel"]] = self.vel_lb
+        self.x_ub[self.state_indices["vel"]] = self.vel_ub
+
+        self.x_lb[self.state_indices["rpy"]] = self.rpy_lb
+        self.x_ub[self.state_indices["rpy"]] = self.rpy_ub
+        self.x_lb[self.state_indices["rpy_cmd"]] = self.rpy_lb
+        self.x_ub[self.state_indices["rpy_cmd"]] = self.rpy_ub
+
+        self.x_lb[self.state_indices["ftot"]] = self.tot_thrust_lb
+        self.x_ub[self.state_indices["ftot"]] = self.tot_thrust_ub
+        self.x_lb[self.state_indices["ftot_cmd"]] = self.tot_thrust_lb
+        self.x_ub[self.state_indices["ftot_cmd"]] = self.tot_thrust_ub
+
+        self.x_lb[self.state_indices["theta"]] = 0
+        self.x_ub[self.state_indices["theta"]] = 1
+        self.x_lb[self.state_indices["dtheta"]] = -0.01
+        self.x_ub[self.state_indices["dtheta"]] = 1
+
+        self.u_lb[self.control_indices["dftot_cmd"]] = self.tot_thrust_rate_lb
+        self.u_ub[self.control_indices["dftot_cmd"]] = self.tot_thrust_rate_ub
+        self.u_lb[self.control_indices["drpy_cmd"]] = self.drpy_lb
+        self.u_ub[self.control_indices["drpy_cmd"]] = self.drpy_ub
+
+        self.u_lb[self.control_indices["ddtheta_cmd"]] = -1
+        self.u_ub[self.control_indices["ddtheta_cmd"]] = 1
+
+        self.slackStates = np.array(
+            [self.state_indices["pos"][-1]]
+        )  # Only z_position has slack variables
+        self.slackControls = np.array(
+            [self.control_indices["dftot_cmd"], self.control_indices["ddtheta_cmd"]]
         )
-        self.slackStates = np.concatenate([self.state_indices["pos"], self.state_indices["vel"]])
-        self.slackControls = np.array([])
-        self.x_ub = np.concatenate(
-            [
-                self.pos_ub,
-                self.vel_ub,
-                self.rpy_ub,
-                [self.tot_thrust_ub],
-                [1],
-                [1],
-                self.rpy_ub,
-                [self.tot_thrust_ub],
-            ]
-        )
-        self.u_lb = np.concatenate([[-self.tot_thrust_ub / 0.1], -self.rpy_ub / 0.1, [-1]])
-        self.u_ub = np.concatenate([[+self.tot_thrust_ub / 0.1], self.rpy_ub / 0.1, [1]])
-        print("X_lb", self.x_lb, "X_ub", self.x_ub, "U_lb", self.u_lb, "U_ub", self.u_ub)
+
+        self.x_scal = self.x_ub - self.x_lb
+        self.u_scal = self.u_ub - self.u_lb
 
     def setupBoundsAndScals(self):
         """Setup the bounds and scaling factors for states and controls."""
@@ -957,13 +1017,13 @@ class DroneDynamics(BaseDynamics):
         elif self.controlType == "Torques":
             u_lb = np.array([self.tot_thrust_lb, -1, -1, -1])
             u_ub = np.array([self.tot_thrust_ub, 1, 1, 1])
-            u_lb_rate = np.array([np.sum(self.thrust_rate_lb), -5, -5, -5])
-            u_ub_rate = np.array([np.sum(self.thrust_rate_ub), 5, 5, 5])
+            u_lb_rate = np.array([self.tot_thrust_rate_lb, -5, -5, -5])
+            u_ub_rate = np.array([self.tot_thrust_rate_ub, 5, 5, 5])
         elif self.controlType == "RPMs":
             u_lb = self.rpm_lb
             u_ub = self.rpm_ub
-            u_lb_rate = -self.rpm_lb / 0.1
-            u_ub_rate = self.rpm_ub / 0.1
+            u_lb_rate = -self.rpm_lb / 0.2
+            u_ub_rate = self.rpm_ub / 0.2
 
         if self.baseDynamics == "Euler":
             x_lb = np.concatenate([self.pos_lb, self.vel_lb, self.rpy_lb, self.w_lb])
@@ -982,8 +1042,11 @@ class DroneDynamics(BaseDynamics):
         self.x_ub = x_ub
         self.x_scal = self.x_ub - self.x_lb
         self.slackStates = np.concatenate(
-            [self.state_indices["pos"], self.state_indices["vel"], self.state_indices["w"]]
-        )  # Slack variables on z_pos, w, and quat
+            [self.state_indices["pos"], self.state_indices["w"]]
+        )  # Slack variables on pos and w
+        self.slackControls = np.array(
+            []
+        )  # np.arange(0, self.nu)  # No control bounds have slack variables
 
         if any(x_ub - x_lb < 0):
             Warning("Some states have upper bounds lower than lower bounds")
@@ -994,10 +1057,6 @@ class DroneDynamics(BaseDynamics):
         self.u_lb = u_lb
         self.u_ub = u_ub
         self.u_scal = self.u_ub - self.u_lb
-
-        self.slackControls = np.array(
-            []
-        )  # np.arange(0, self.nu)  # No control bounds have slack variables
 
         if any(u_ub - u_lb < 0):
             Warning("Some controls have upper bounds lower than lower bounds")
@@ -1065,8 +1124,6 @@ class DroneDynamics(BaseDynamics):
             influence += disturbance_impact @ disturbance_impact.T
 
         influence /= num_samples
-        # print("Influence matrix", influence.shape, np.max(influence))
-        # raise ValueError("Check the influence matrix")
 
         # Create state transition function
         def fstate(x, dt, u):
@@ -1096,13 +1153,13 @@ class DroneDynamics(BaseDynamics):
         self.ukf.P = np.eye(nx) * 0.01  # Initial uncertainty
         self.ukf.R = np.eye(nz) * measurement_noise**2  # Measurement noise
 
-    def runUKF(self, z, u):
+    def runUKF(self, z: np.ndarray, u: np.ndarray) -> np.ndarray:
         """Run the UKF for the drone/environment controller.
 
-        args:
+        Args:
             z: np.ndarray: The measurement
             u: np.ndarray: The control input
-        returns:
+        Returns:
             np.ndarray: The updated state estimate
         """
         self.ukf.predict(u=u)

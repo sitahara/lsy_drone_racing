@@ -1,3 +1,4 @@
+from __future__ import annotations
 import casadi as ca
 import l4acados as l4a
 import numpy as np
@@ -56,27 +57,25 @@ class AcadosOptimizer(BaseOptimizer):
         ocp.solver_options.N_horizon = self.n_horizon  # number of control intervals
         ocp.solver_options.tf = self.n_horizon * self.ts  # prediction horizon
         ocp.solver_options.integrator_type = self.solver_options.get(
-            "acados_integrator", "ERK"
+            "integrator", "ERK"
         )  # "ERK", "IRK", "GNSF", "DISCRETE"
         ocp.solver_options.qp_solver = self.solver_options.get(
-            "acados_qp_solver", "PARTIAL_CONDENSING_HPIPM"
+            "qp_solver", "PARTIAL_CONDENSING_HPIPM"
         )
         # FULL_CONDENSING_QPOASES
         ocp.solver_options.hessian_approx = "GAUSS_NEWTON"  # "EXACT", "GAUSS_NEWTON"
         ocp.solver_options.cost_discretization = self.solver_options.get(
-            "acados_cost_discretization", "EULER"
+            "cost_discretization", "EULER"
         )  # "INTEGRATOR", "EULER"
         ocp.solver_options.nlp_solver_type = self.solver_options.get(
-            "acados_nlp_solver", "SQP_RTI"
+            "nlp_solver", "SQP_RTI"
         )  # SQP, SQP_RTI
         ocp.solver_options.globalization = self.solver_options.get(
-            "acados_globalization", "MERIT_BACKTRACKING"
+            "globalization", "MERIT_BACKTRACKING"
         )  # "FIXED_STEP", "MERIT_BACKTRACKING"
 
-        ocp.solver_options.tol = self.solver_options.get("acados_tol", 1e-3)  # NLP error tolerance
-        ocp.solver_options.qp_tol = self.solver_options.get(
-            "acados_qp_tol", 1e-3
-        )  # QP error tolerance
+        ocp.solver_options.tol = self.solver_options.get("tol", 1e-3)  # NLP error tolerance
+        ocp.solver_options.qp_tol = self.solver_options.get("qp_tol", 1e-3)  # QP error tolerance
 
         if self.dynamics.cost_type == "linear":
             # Linear LS: J = || Vx * (x - x_ref) ||_W^2 + || Vu * (u - u_ref) ||_W^2
@@ -212,15 +211,16 @@ class AcadosOptimizer(BaseOptimizer):
             self.ocp_solver = AcadosOcpSolver(
                 self.ocp,
                 self.json_file,
-                build=self.solver_options.get("acados_build", True),
-                generate=self.solver_options.get("acados_generate", True),
+                build=self.solver_options.get("build", True),
+                generate=self.solver_options.get("generate", True),
+                verbose=False,
             )
             # self.ocp_sim = AcadosSim(self.ocp)
-            self.ocp_integrator = AcadosSimSolver(
-                self.ocp,
-                build=self.solver_options.get("acados_build", True),
-                generate=self.solver_options.get("acados_generate", True),
-            )
+            # self.ocp_integrator = AcadosSimSolver(
+            #     self.ocp,
+            #     build=self.solver_options.get("build", True),
+            #     generate=self.solver_options.get("generate", True),
+            # )
 
     def step(
         self,
@@ -251,12 +251,12 @@ class AcadosOptimizer(BaseOptimizer):
         self.ocp_solver.set(0, "x", current_state)
         if self.x_guess is None:
             Warning("No initial state guess provided. Using the default.")
-            self.x_guess = np.tile(current_state, (1, self.n_horizon + 1))
+            self.x_guess = np.tile(current_state, (self.n_horizon + 1, 1)).T
             if x_ref is not None:
-                self.x_guess[: x_ref.shape[0], 1:] = x_ref
+                self.x_guess[: x_ref.shape[0], : x_ref.shape[1]] = x_ref
         if self.u_guess is None:
             Warning("No initial control guess provided. Using the default.")
-            self.u_guess = np.tile(self.dynamics.u_eq, (1, self.n_horizon))
+            self.u_guess = np.tile(self.dynamics.u_eq, (self.n_horizon, 1)).T
             if u_ref is not None:
                 self.u_guess[: u_ref.shape[0], :] = u_ref
 
