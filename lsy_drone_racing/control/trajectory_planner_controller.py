@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pybullet as p
 
+import time
+
 from lsy_drone_racing.control import BaseController
 from lsy_drone_racing.planner import Planner
 
@@ -35,14 +37,15 @@ class TrajectoryController(BaseController):
         self._tick = 0
         self._freq = initial_info["env_freq"]
 
-        self.DEBUG = True  # Toggles the debug display
-        self.SAMPLE_IDX = 19  # Controls how much farther the desired position will be
+        self.DEBUG = False  # Toggles the debug display
+        self.SAMPLE_IDX = 13  # Controls how much farther the desired position will be
 
         self.planner = Planner(
             DEBUG=self.DEBUG,
             USE_QUINTIC_SPLINE=False,
             MAX_ROAD_WIDTH=0.4,
             SAFETY_MARGIN=0.1,
+            NUM_POINTS=20,
             K_J=0.1,
             MAX_CURVATURE=100.0,
         )
@@ -61,6 +64,7 @@ class TrajectoryController(BaseController):
             The drone state [x, y, z, vx, vy, vz, ax, ay, az, yaw, rrate, prate, yrate] as a numpy
                 array.
         """
+        t0=time.time()
         gate_x, gate_y, gate_z = (
             obs["gates_pos"][:, 0],
             obs["gates_pos"][:, 1],
@@ -86,7 +90,7 @@ class TrajectoryController(BaseController):
         )
 
         # debug display on pybullet GUI
-        if self.DEBUG is True:
+        if False:
             if self._tick % 10 == 0:
                 for i in range(len(result_path.x) - 1):
                     p.addUserDebugLine(
@@ -107,6 +111,8 @@ class TrajectoryController(BaseController):
                         lifeTime=0,  # 0 means the line persists indefinitely
                         physicsClientId=0,
                     )
+        t1=time.time()
+        print(t1-t0)
         return np.concatenate(
             (
                 np.array(

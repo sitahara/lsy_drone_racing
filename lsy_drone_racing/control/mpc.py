@@ -154,6 +154,8 @@ class MPC(BaseController):
             else:
                 action = np.zeros((4, 1))
                 action[0] = self.dynamics.mass * self.dynamics.g * 1.5
+            if obs["pos"][2] >= 0.2:
+                self.control_state = 1
         else:
             self.updateTargetTrajectory()
             start_time = time.time()
