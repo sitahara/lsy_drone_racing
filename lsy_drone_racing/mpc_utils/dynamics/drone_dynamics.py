@@ -763,6 +763,7 @@ class DroneDynamics(BaseDynamics):
             if self.useObstacleConstraints and np.any(
                 np.not_equal(self.obstacles_visited, obs["obstacles_visited"])
             ):
+                # if self.useObstacleConstraints:
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
                 self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
@@ -770,6 +771,7 @@ class DroneDynamics(BaseDynamics):
                 ].flatten()
                 print("Obstacle positions updated")
                 updated = True
+            # if self.pathPlanner.parametric:
             if self.pathPlanner.parametric and np.any(
                 np.not_equal(self.gates_visited, obs["gates_visited"])
             ):
@@ -878,21 +880,26 @@ class DroneDynamics(BaseDynamics):
             theta=theta, path_params=self.p[self.param_indices["path"]]
         )["dpath"]
 
+        ddpath = self.pathPlanner.ddpath_function(
+            theta=theta, path_params=self.p[self.param_indices["path"]]
+        )["ddpath"]
+
         t = dpath / ca.norm_2(dpath)  # Normalized Tangent vector at the current progress
-        n = ca.vertcat(-t[1], t[0], 0)  # Normal vector at the current progress
+        n = ddpath / ca.norm_2(ddpath)  # Normal vector at the current progress
+        # n = ca.vertcat(-t[1], t[0], 0)  # Normal vector at the current progress
         b = ca.cross(t, n)  # Binormal vector at the current progress
 
-        def getTunnelWidth2(gates_pos_sym: ca.MX, pos: ca.MX) -> ca.MX:
-            """Calculate the tunnel width at the current progress."""
-            # Calculate the progress distance to the nearest gate
-            d = ca.MX.zeros(self.gates_pos.shape[0])
-            for k in range(self.gates_pos.shape[0]):
-                d[k] = ca.norm_2(gates_pos_sym[k * 3 : (k + 1) * 3] - pos)
-            dmin = ca.mmin(d)
-            sigmoid = 1 / (
-                1 + ca.exp(-self.tunnelTransitionSteepness * (dmin - self.tunnelTransitionMargin))
-            )
-            return self.Wn + (self.Wgate - self.Wn) * sigmoid
+        # def getTunnelWidth2(gates_pos_sym: ca.MX, pos: ca.MX) -> ca.MX:
+        #     """Calculate the tunnel width at the current progress."""
+        #     # Calculate the progress distance to the nearest gate
+        #     d = ca.MX.zeros(self.gates_pos.shape[0])
+        #     for k in range(self.gates_pos.shape[0]):
+        #         d[k] = ca.norm_2(gates_pos_sym[k * 3 : (k + 1) * 3] - pos)
+        #     dmin = ca.mmin(d)
+        #     sigmoid = 1 / (
+        #         1 + ca.exp(-self.tunnelTransitionSteepness * (dmin - self.tunnelTransitionMargin))
+        #     )
+        #     return self.Wn + (self.Wgate - self.Wn) * sigmoid
 
         def getTunnelWidth(gate_thetas: ca.MX, theta: ca.MX) -> ca.MX:
             """Calculate the tunnel width at the current progress."""
@@ -901,7 +908,8 @@ class DroneDynamics(BaseDynamics):
             sigmoid = 1 / (
                 1 + ca.exp(-self.tunnelTransitionSteepness * (d - self.tunnelTransitionMargin))
             )
-            return self.Wn + (self.Wgate - self.Wn) * sigmoid
+            return self.Wgate + (self.Wn - self.Wgate) * sigmoid
+            # return self.Wn + (self.Wgate - self.Wn) * sigmoid
 
         W = getTunnelWidth(gate_thetas, theta)
         # W = getTunnelWidth2(gates_pos_sym, pos)

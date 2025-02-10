@@ -378,6 +378,8 @@ class HermiteSpline:
         self.path_function = ca.Function("path", [theta], [path], ["theta"], ["path"])
         dpath = ca.jacobian(self.path_function(theta), theta)
         self.dpath_function = ca.Function("dpath", [theta], [dpath], ["theta"], ["dpath"])
+        ddpath = ca.jacobian(self.dpath_function(theta), theta)
+        self.ddpath_function = ca.Function("ddpath", [theta], [ddpath], ["theta"], ["ddpath"])
 
         return None
 
@@ -442,6 +444,10 @@ class HermiteSpline:
         dpath = ca.jacobian(self.path_function(theta, path_params), theta)
         self.dpath_function = ca.Function(
             "dpath", [theta, path_params], [dpath], ["theta", "path_params"], ["dpath"]
+        )
+        ddpath = ca.jacobian(self.dpath_function(theta, path_params), theta)
+        self.ddpath_function = ca.Function(
+            "ddpath", [theta, path_params], [ddpath], ["theta", "path_params"], ["ddpath"]
         )
         return None
 
