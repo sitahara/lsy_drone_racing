@@ -65,6 +65,7 @@ class MPC(BaseController):
         optimizer_info = config["optimizer_info"]
         solver_options = config["solver_options"]
         constraints_info = config["constraints_info"]
+        hermite_spline_info = config["hermite_spline_info"]
 
         cost_info = config["cost_info"]
         if self.referenceTracking:
@@ -107,6 +108,10 @@ class MPC(BaseController):
                 gates_pos=self.initial_obs["gates_pos"],
                 gates_rpy=self.initial_obs["gates_rpy"],
                 parametric=True,
+                debug=hermite_spline_info["debug"],
+                end_at_start=hermite_spline_info["end_at_start"],
+                tangent_scaling=hermite_spline_info["tangent_scaling"],
+                reverse_start_orientation=hermite_spline_info["reverse_start_orientation"],
             )
         elif self.referenceType == "hermite_spline":
             # Spline is recalculated when gates are updated
@@ -116,6 +121,10 @@ class MPC(BaseController):
                 gates_pos=self.initial_obs["gates_pos"],
                 gates_rpy=self.initial_obs["gates_rpy"],
                 parametric=False,
+                debug=hermite_spline_info["debug"],
+                end_at_start=hermite_spline_info["end_at_start"],
+                tangent_scaling=hermite_spline_info["tangent_scaling"],
+                reverse_start_orientation=hermite_spline_info["reverse_start_orientation"],
             )
 
         # Initialize the dynamics model

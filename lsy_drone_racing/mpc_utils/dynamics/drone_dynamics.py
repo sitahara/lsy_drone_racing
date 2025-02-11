@@ -998,7 +998,10 @@ class DroneDynamics(BaseDynamics):
                 + (self.tunnel_info["Wn"] - self.tunnel_info["Wgate"]) * sigmoid
             )
 
-        W = getTunnelWidth2(gates_pos_sym, pos)
+        if self.tunnel_info["distanceParameterization"] == "theta":
+            W = getTunnelWidth(gate_thetas, theta)
+        else:
+            W = getTunnelWidth2(gates_pos_sym, pos)
         # W = getTunnelWidth(gate_thetas, theta)
         H = W
         # Left-lower corner of the tunnel around the path
@@ -1020,7 +1023,8 @@ class DroneDynamics(BaseDynamics):
             "tunnel",
             self.tunnel_info["soft"],
             self.tunnel_info["softPenalty"],
-            slack_lh=0.4 * np.ones((len(tunnel_constraints_lh),)),
+            slack_lh=self.tunnel_info["maxAdditionalWidth"]
+            * np.ones((len(tunnel_constraints_lh),)),
             slack_uh=None,
         )
         print("Tunnel constraints set up.")

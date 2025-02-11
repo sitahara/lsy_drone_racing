@@ -48,16 +48,18 @@ R_ddtheta = 0.01 # L2 dtheta weight
 
 [constraints_info]
 obstacles.use = true
-obstacles.diameter = 0.25
+obstacles.diameter = 0.20
 obstacles.soft = true
 obstacles.softPenalty = 1e7
-obstacles.minDistance = 0.09
+obstacles.minDistance = 0.10
 tunnel.use = true
-tunnel.Wn = 0.5 # Nominal Tunnel Width
-tunnel.Wgate = 0.05 # Tunnel Width at gates, # Gate size: [0.45,0.45]
-tunnel.transitionMidpoint = 0.1 # Midpoint of the Tunnel Transition sigmoid
+tunnel.Wn = 0.4 # Nominal Tunnel Width
+tunnel.Wgate = 0.03 # Tunnel Width at gates, # Gate size: [0.45,0.45]
+tunnel.transitionMidpoint = 0.07 # Midpoint of the Tunnel Transition sigmoid
 tunnel.transitionSlope = 100 # Steepness of the Tunnel Transition sigmoid
+tunnel.distanceParameterization = "theta" # "theta", "pos"
 tunnel.soft = true
+tunnel.maxAdditionalWidth = 0.4
 tunnel.softPenalty = 1e10 #
 
 [optimizer_info]
@@ -84,3 +86,8 @@ acados.build=true
 acados.generate=true
 acados.verbose=false
 
+[hermite_spline_info]
+tangent_scaling = 3
+debug = false
+end_at_start = false
+reverse_start_orientation = false

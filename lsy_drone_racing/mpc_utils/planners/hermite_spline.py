@@ -123,6 +123,7 @@ class HermiteSpline:
         else:
             self.waypoints = np.vstack((self.waypoints[0], gates_pos))
             self.orientations = np.vstack((self.orientations[0], gates_rpy))
+        self.tangents = self.compute_normals(self.orientations)
         if self.parametric:
             self.path_params_values = np.concatenate(
                 (self.waypoints.flatten(), self.tangents.flatten() * self.tangent_scaling)
