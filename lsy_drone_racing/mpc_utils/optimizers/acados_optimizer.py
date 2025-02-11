@@ -16,6 +16,7 @@ from acados_template.utils import ACADOS_INFTY
 from numpy.typing import NDArray
 
 from lsy_drone_racing.mpc_utils.dynamics import DroneDynamics
+
 # from lsy_drone_racing.mpc_utils.models import ResidualPytorchModel, GpPytorchModel
 
 from .optimizer import BaseOptimizer

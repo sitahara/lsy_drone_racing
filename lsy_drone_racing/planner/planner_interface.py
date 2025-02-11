@@ -212,7 +212,7 @@ class Planner:
                 gate_y[0] + 0.7 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8),
                 gate_y[1],
                 gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2)]
-            real_wp_z = [0.1, 0.1, gate_z[0], gate_z[0], (gate_z[0]+gate_z[1])/2, gate_z[1], gate_z[1]]
+            real_wp_z = [0.1, 0.15, gate_z[0], gate_z[0], (gate_z[0]+gate_z[1])/2, gate_z[1], gate_z[1]]
         elif next_gate == 2:
             real_wp_x = [
                 gate_x[0],
