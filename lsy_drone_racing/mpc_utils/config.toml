@@ -70,7 +70,7 @@ json_file = "acados_ocp.json"
 
 [solver_options]
 ipopt.print_level= 0
-ipopt.tol= 1e-3
+ipopt.tol= 1e-4
 ipopt.max_iter=50
 ipopt.linear_solver= "mumps"
 acados.nlp_solver= "SQP_RTI"
@@ -78,9 +78,9 @@ acados-integrator= "ERK"
 acados.cost_discretization= "EULER"
 acados.qp_solver= "PARTIAL_CONDENSING_HPIPM"
 acados.globalization= "MERIT_BACKTRACKING"
-acados.tol= 1e-3
-acados.qp_tol= 1e-3
+acados.tol= 1e-4
+acados.qp_tol= 1e-4
 acados.build=true
 acados.generate=true
-acados.verbose=true
+acados.verbose=false
 

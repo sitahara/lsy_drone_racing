@@ -1,7 +1,9 @@
 """Module for Model Predictive Controller implementation."""
 
 from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 import casadi as ca
 import numpy as np
@@ -15,10 +17,14 @@ from lsy_drone_racing.control import BaseController
 from lsy_drone_racing.mpc_utils import (
     AcadosOptimizer,
     DroneDynamics,
+    HermiteSpline,
     IPOPTOptimizer,
     MPCCppDynamics,
-    HermiteSpline,
 )
+from lsy_drone_racing.planner import Planner
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 
 class MPC(BaseController):
@@ -73,8 +79,27 @@ class MPC(BaseController):
         self.gate_times = np.ones(self.initial_obs["gates_visited"].shape[0]) * 10
         self.number_gates_passed = 0
 
-        # Path Planner and Target Trajectory initialization
-        if not self.referenceTracking or constraints_info.get("tunnel", {"use": False})["use"]:
+        pathPlanner = None
+
+        if self.referenceType == "frenet":
+            # Sho's path planner
+            self._tick = 0
+            self._freq = initial_info["env_freq"]
+
+            self.DEBUG = False  # Toggles the debug display
+            self.SAMPLE_IDX = 13  # Controls how much farther the desired position will be
+
+            self.planner = Planner(
+                DEBUG=self.DEBUG,
+                USE_QUINTIC_SPLINE=False,
+                MAX_ROAD_WIDTH=0.4,
+                SAFETY_MARGIN=0.1,
+                NUM_POINTS=20,
+                K_J=0.1,
+                MAX_CURVATURE=100.0,
+            )
+            constraints_info["tunnel"] = {"use": False}
+        elif not self.referenceTracking or constraints_info.get("tunnel", {"use": False})["use"]:
             # Spline is parametric in gate positions and orientation
             pathPlanner = HermiteSpline(
                 start_pos=self.initial_obs["pos"],
@@ -92,11 +117,6 @@ class MPC(BaseController):
                 gates_rpy=self.initial_obs["gates_rpy"],
                 parametric=False,
             )
-        elif self.referenceType == "frenet":
-            # Sho's path planner
-            raise NotImplementedError("Frenet reference tracking is not implemented yet.")
-        else:
-            self.pathPlanner = None
 
         # Initialize the dynamics model
         self.dynamics = DroneDynamics(
@@ -155,7 +175,7 @@ class MPC(BaseController):
                 action[2] = 0.2
             else:
                 action = np.zeros((4, 1))
-                action[0] = self.dynamics.mass * self.dynamics.g * 1.5
+                action[0] = self.dynamics.mass * self.dynamics.g * 1.3
             if obs["pos"][2] >= 0.2:
                 self.control_state = 1
         else:
@@ -215,9 +235,14 @@ class MPC(BaseController):
                 self.collided = True
             if self.print_info:
                 print(f"Error: {self.tot_error * self.ts}")
-
-        # planned_pos = self.opt.x_last[self.dynamics.state_indices["pos"], :]
-        # self.plotInPyBullet(planned_pos.T, lifetime=1, color=[0, 1, 0])
+        if hasattr(self, "_tick"):
+            self._tick += 1
+        if not hasattr(self, "plot_counter"):
+            self.plot_counter = 0
+        if self.plot_counter % 10 == 0:
+            planned_pos = self.opt.x_last[self.dynamics.state_indices["pos"], :]
+            self.plotInPyBullet(planned_pos.T, lifetime=1, point_color=[0, 1, 0])
+        self.plot_counter += 1
 
     def episode_callback(self):
         """Callback function called once after the episode is finished.
@@ -232,6 +257,8 @@ class MPC(BaseController):
                 np.sum(self.gate_times),
                 self.number_gates_passed,
             )
+        if hasattr(self, "_tick"):
+            self._tick += 0
         return None
 
     def calculate_initial_guess(self):
@@ -276,7 +303,8 @@ class MPC(BaseController):
 
             self.target_trajectory = target_trajectory
         elif self.referenceType == "frenet":
-            raise NotImplementedError("Frenet reference tracking is not implemented yet.")
+            pass
+            # raise NotImplementedError("Frenet reference tracking is not implemented yet.")
         else:
             waypoints = np.array(
                 [
@@ -294,7 +322,7 @@ class MPC(BaseController):
             )
             t = np.linspace(0, t_total, len(waypoints))
             self.target_trajectory = CubicSpline(t, waypoints)
-        if self.visualize:
+        if self.visualize and self.referenceType != "frenet":
             t_vis = np.linspace(0, t_total, num_points)
             spline_points = self.target_trajectory(t_vis)
             self.plotInPyBullet(spline_points, lifetime=0)
@@ -304,21 +332,68 @@ class MPC(BaseController):
     def updateTargetTrajectory(self):
         """Update the target trajectory for the MPC controller."""
         if self.referenceTracking:
-            current_time = self.n_step * self.ts
-            t_horizon = np.linspace(
-                current_time, current_time + self.n_horizon * self.ts, self.n_horizon + 1
-            )
+            if self.referenceType == "frenet":
+                obs = self.obs
+                gate_x, gate_y, gate_z = (
+                    obs["gates_pos"][:, 0],
+                    obs["gates_pos"][:, 1],
+                    obs["gates_pos"][:, 2],
+                )
+                gate_yaw = obs["gates_rpy"][:, 2]
+                obs_x, obs_y = obs["obstacles_pos"][:, 0], obs["obstacles_pos"][:, 1]
+                next_gate = obs["target_gate"] + 1
+                drone_x, drone_y = obs["pos"][0], obs["pos"][1]
+                drone_vx, drone_vy = obs["vel"][0], obs["vel"][1]
+                result_path, ref_path, _ = self.planner.plan_path_from_observation(
+                    gate_x,
+                    gate_y,
+                    gate_z,
+                    gate_yaw,
+                    obs_x,
+                    obs_y,
+                    drone_x,
+                    drone_y,
+                    drone_vx,
+                    drone_vy,
+                    next_gate,
+                )
+                num_points = min(len(result_path.x), self.n_horizon)
+                # print(f"Number of points: {num_points}")
+                self.x_ref[:3, :num_points] = np.array(
+                    [
+                        result_path.x[:num_points],
+                        result_path.y[:num_points],
+                        result_path.z[:num_points],
+                    ]
+                )
+                self.x_ref[:3, num_points:] = np.tile(
+                    np.array([result_path.x[-1], result_path.y[-1], result_path.z[-1]]).reshape(
+                        3, 1
+                    ),
+                    (1, self.n_horizon - num_points + 1),
+                )
+                if self.visualize:
+                    self.plotInPyBullet(
+                        np.array([result_path.x, result_path.y, result_path.z]).T,
+                        lifetime=0,
+                        point_color=[1, 0, 0],
+                    )
+            else:
+                current_time = self.n_step * self.ts
+                t_horizon = np.linspace(
+                    current_time, current_time + self.n_horizon * self.ts, self.n_horizon + 1
+                )
 
-            # Evaluate the target trajectory at the time points
-            pos_des = self.target_trajectory(t_horizon).T
-            # Handle the case where the end time exceeds the total time
-            if t_horizon[-1] > self.t_total:
-                last_value = self.target_trajectory(self.t_total).reshape(3, 1)
-                n_repeat = np.sum(t_horizon > self.t_total)
-                pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
-            # Update the reference trajectory
-            # np.tile( np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1) )
-            self.x_ref[:3, :] = pos_des
+                # Evaluate the target trajectory at the time points
+                pos_des = self.target_trajectory(t_horizon).T
+                # Handle the case where the end time exceeds the total time
+                if t_horizon[-1] > self.t_total:
+                    last_value = self.target_trajectory(self.t_total).reshape(3, 1)
+                    n_repeat = np.sum(t_horizon > self.t_total)
+                    pos_des[:, -n_repeat:] = np.tile(last_value, (1, n_repeat))
+                # Update the reference trajectory
+                # np.tile( np.array([1, 1, 0.5]).reshape(3, 1), (1, self.n_horizon + 1) )
+                self.x_ref[:3, :] = pos_des
             self.n_step += 1
         return None
 
@@ -363,3 +438,8 @@ class MPC(BaseController):
             else:
                 updated_config[section] = params
         return updated_config
+
+    def episode_reset(self):
+        super().episode_reset()
+        # hyperparams = {"solver_options": {"acados": {"generate": False, "build": False}}}
+        # self.__init__(self.initial_obs, self.initial_info, hyperparams=hyperparams)

@@ -759,7 +759,7 @@ class DroneDynamics(BaseDynamics):
                 self.param_values[self.param_indices["obstacles_pos"]] = self.obstacles_pos[
                     :, :-1
                 ].flatten()
-            if self.pathPlanner.parametric:
+            if self.pathPlanner is not None and self.pathPlanner.parametric:
                 self.param_values[self.param_indices["path"]] = self.pathPlanner.path_params_values
             if self.tunnel_info["use"]:
                 # print(self.param_indices)
@@ -780,7 +780,7 @@ class DroneDynamics(BaseDynamics):
                 ].flatten()
                 # print("Obstacle positions updated")
                 updated = True
-            if self.pathPlanner.parametric:
+            if self.pathPlanner is not None and self.pathPlanner.parametric:
                 # if self.pathPlanner.parametric and np.any(
                 #     np.not_equal(self.gates_visited, obs["gates_visited"])
                 # ):

@@ -237,7 +237,7 @@ class AcadosOptimizer(BaseOptimizer):
         # Sequence is: [s_bu,s_bx,s_g,s_h], where bu is control bounds, bx is state bounds, g is equality constraints, h is inequality constraints
         # Zu is L2 penalty for upper slacks, zu is L1 penalty for upper slacks
         # Zl is L2 penalty for lower slacks, zl is L1 penalty for lower slacks
-        print("Zl_0", Zl_0, self.useSoftBounds, self.dynamics.softConstrIdx)
+        # print("Zl_0", Zl_0, self.useSoftBounds, self.dynamics.softConstrIdx)
         if self.useSoftBounds or self.dynamics.softConstrIdx is not None:
             ocp.cost.Zl_0 = Zl_0
             ocp.cost.Zu_0 = Zu_0
