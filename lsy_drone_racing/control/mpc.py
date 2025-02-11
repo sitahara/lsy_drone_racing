@@ -82,14 +82,14 @@ class MPC(BaseController):
             self._freq = initial_info["env_freq"]
 
             self.DEBUG = False  # Toggles the debug display
-            self.SAMPLE_IDX = 13  # Controls how much farther the desired position will be
 
             self.planner = Planner(
                 DEBUG=self.DEBUG,
                 USE_QUINTIC_SPLINE=False,
                 MAX_ROAD_WIDTH=0.4,
                 SAFETY_MARGIN=0.1,
-                NUM_POINTS=20,
+                NUM_POINTS=self.n_horizon,
+                DT=0.1 / 3,
                 K_J=0.1,
                 MAX_CURVATURE=100.0,
             )
