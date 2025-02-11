@@ -30,8 +30,8 @@ class MPC(BaseController):
         initial_info: dict,
         config_path: str = "lsy_drone_racing/mpc_utils/config.toml",
         hyperparams: dict = None,
-        print_info: bool = False,
-        visualize: bool = False,
+        print_info: bool = True,
+        visualize: bool = True,
     ):
         super().__init__(initial_obs, initial_info)
         self.initial_info = initial_info
@@ -53,6 +53,8 @@ class MPC(BaseController):
         self.referenceTracking = dynamics_info.get("referenceTracking", True)
         self.useStartController = dynamics_info.get("start_controller", False)
         self.firstGuess = dynamics_info.get("firstGuess", "ipopt")
+        self.print_info = dynamics_info.get("print_info", False)
+        self.visualize = dynamics_info.get("visualize", False)
 
         optimizer_info = config["optimizer_info"]
         solver_options = config["solver_options"]
@@ -72,7 +74,7 @@ class MPC(BaseController):
         self.number_gates_passed = 0
 
         # Path Planner and Target Trajectory initialization
-        if not self.referenceTracking or constraints_info.get("useTunnelConstraints", False):
+        if not self.referenceTracking or constraints_info.get("tunnel", {"use": False})["use"]:
             # Spline is parametric in gate positions and orientation
             pathPlanner = HermiteSpline(
                 start_pos=self.initial_obs["pos"],
@@ -266,8 +268,8 @@ class MPC(BaseController):
                     arr, _ = self.dynamics.pathPlanner.getPathPointsForPlotting(
                         theta_0=theta_0, theta_end=theta_end, num_points=1, only_path=True
                     )
-                if self.visualize:
-                    self.plotInPyBullet(arr, point_color=[0, 0, 1])
+                # if self.visualize:
+                #     self.plotInPyBullet(arr, point_color=[0, 1, 0])
                 return arr
 
             self.target_trajectory = target_trajectory

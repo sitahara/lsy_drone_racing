@@ -11,6 +11,8 @@ t_predict = 0 # Solve optimization problem for state predicted into the future, 
 useDrags = true # Whether to include drag forces in the dynamics
 start_controller = false # Whether to use a start controller until a certain height has been reached
 firstGuess = "acados" #"ipopt", 
+visualize=true
+printInfo=false
 [dynamics_info.ukf_info]
 useUKF=false # Whether to use UnscentedKalmanFilter
 measurement_noise=0.01 # std
@@ -19,6 +21,7 @@ process_noise= 0.01 # std
 
 [cost_info] # Optimize through TurBO
 [cost_info.linear] # For linear least squares cost (all referenceTracking formulations)
+cost_type = "linear"
 Qs_pos = 5 #4
 Qs_vel = 0.05
 Qs_rpy = 0.6
@@ -33,27 +36,33 @@ R_f = 0.2 # individual motor thrusts
 R_df = 0.01 # individual motor thrust rates
 R_torques = 0.1 # torques [tau_x,tau_y,tau_z]
 [cost_info.mpcc]
+cost_type="mpcc"
 Qs_l = 1 # lag weights
 Qs_c = 1 # contour weights
-Qs_rpy = 0.5 # RPY weights
+Qs_rpy = 10000 # RPY weights
 Qs_drpy = 0.1 # ang vel weights
 R_f = 0.2 # individual motor thrusts
 R_df = 0.01 # thrust rate weights
-Q_dtheta = 1 # L1 dtheta weight
+Q_dtheta = 0.01 # L1 dtheta weight
 R_ddtheta = 0.01 # L2 dtheta weight 
 
 [constraints_info]
-useObstacleConstraints = true
-obstacle_diameter = 0.20
-useTunnelConstraints = false # only for parametric hermite spline
-Wn = 0.8# Nominal Tunnel Width
-Wgate = 0.2 # Tunnel Width at gates, # Gate size: [0.45,0.45]
-tunnelTransitionMargin = 0.03 # Midpoint of the Tunnel Transition sigmoid
-tunnelTransitionSteepness = 100 # Steepness of the Tunnel Transition sigmoid
+obstacles.use = true
+obstacles.diameter = 0.25
+obstacles.soft = true
+obstacles.softPenalty = 1e7
+obstacles.minDistance = 0.09
+tunnel.use = true
+tunnel.Wn = 0.5 # Nominal Tunnel Width
+tunnel.Wgate = 0.05 # Tunnel Width at gates, # Gate size: [0.45,0.45]
+tunnel.transitionMidpoint = 0.1 # Midpoint of the Tunnel Transition sigmoid
+tunnel.transitionSlope = 100 # Steepness of the Tunnel Transition sigmoid
+tunnel.soft = true
+tunnel.softPenalty = 1e10 #
 
 [optimizer_info]
-useSoftConstraints = true
-softPenalty = 1e4
+useSoftBounds = true
+softBoundPenalty = 1e4
 useGP = false # Not finished yet
 useZoro = false # Not Implemented yet
 export_dir ="generated_code/mpc"
@@ -73,4 +82,5 @@ acados.tol= 1e-3
 acados.qp_tol= 1e-3
 acados.build=true
 acados.generate=true
+acados.verbose=true
 

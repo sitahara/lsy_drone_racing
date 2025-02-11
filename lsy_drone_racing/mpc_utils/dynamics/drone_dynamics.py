@@ -160,8 +160,7 @@ class DroneDynamics(BaseDynamics):
         self.useDrags = dynamics_info.get("useDrags", False)
 
         # Initial values of the obstacles and gates
-        self.obstacle_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
-        self.obstacle_diameter = self.constraints_info.get("obstacle_diameter", 0.1)
+        self.obstacles_pos = self.initial_obs.get("obstacles_pos", np.zeros((4, 3)))
         self.obstacles_visited = self.initial_obs.get("obstacles_visited", np.zeros((4,)))
         self.gates_pos = self.initial_obs.get("gates_pos", np.zeros((4, 3)))
         self.gates_rpy = self.initial_obs.get("gates_rpy", np.zeros((4, 3)))
@@ -187,7 +186,7 @@ class DroneDynamics(BaseDynamics):
                 self.addToParameters(self.pathPlanner.path_params, "path")
         else:
             self.pathPlanner = None
-            self.useTunnelConstraints = False
+            self.constraints_info["tunnel"]["use"] = False
 
         if self.baseDynamics == "system_id":
             self.baseSystemIDDynamics()
@@ -571,22 +570,22 @@ class DroneDynamics(BaseDynamics):
         self.nl_constr = None
         # Dict of all non-linear constraints
         self.nl_constr_indices = {}
+        self.softConstrIdx = None
+        self.softConstrPenalties = None
+        self.softConstr_lh = None
+        self.softConstr_uh = None
         # Current index of the non-linear constraints
         self.current_nl_constr_index = 0
+        self.obstacle_info = self.constraints_info.get("obstacles", {"use": False})
+        self.tunnel_info = self.constraints_info.get("tunnel", {"use": False})
 
-        self.useObstacleConstraints = self.constraints_info.get("useObstacleConstraints", True)
-        self.useTunnelConstraints = self.constraints_info.get("useTunnelConstraints", False)
-        self.tunnelTransitionMargin = self.constraints_info.get("tunnelTransitionMargin", 0.1)
-        self.tunnelTransitionSteepness = self.constraints_info.get("tunnelTransitionSteepness", 10)
-        self.Wn = self.constraints_info.get("Wn", 0.3)
-        self.Wgate = self.constraints_info.get("Wgate", 0.2)
         if self.baseDynamics == "Quaternion":
             # Norm and euler angle constraints
             self.setupQuatConstraints()
-        if self.useObstacleConstraints:
+        if self.obstacle_info["use"]:
             # Obstacle constraints
             self.setupObstacleConstraints()
-        if self.useTunnelConstraints and self.pathPlanner.parametric:
+        if self.tunnel_info["use"] and self.pathPlanner.parametric:
             # Tunnel constraints
             self.setupTunnelConstraints()
 
@@ -722,13 +721,22 @@ class DroneDynamics(BaseDynamics):
         pos_error = pos - path_pos
         # Lag Cost
         lag_error = ca.mtimes([ca.dot(path_tangent, pos_error), path_tangent])
-        lag_cost = ca.mtimes([lag_error.T, self.Qs_l, lag_error])
+        lag_cost = (
+            lag_error.T @ self.Qs_l @ lag_error
+        )  # ca.mtimes([lag_error.T, self.Qs_l, lag_error])
         # Contour Cost
         contour_error = pos_error - lag_error
-        contour_cost = ca.mtimes([contour_error.T, self.Qs_c, contour_error])
+        contour_cost = (
+            contour_error.T @ self.Qs_c @ contour_error
+        )  # ca.mtimes([contour_error.T, self.Qs_c, contour_error])
         # (d)RPY Cost
-        rpy_cost = ca.mtimes([(rpy).T, self.Qs_rpy, rpy])
-        drpy_cost = ca.mtimes([drpy_cmd.T, self.Qs_drpy, drpy_cmd])
+        rpy_cost = rpy.T @ self.Qs_rpy @ rpy  # ca.mtimes([(rpy).T, self.Qs_rpy, rpy])
+        rpy_cost += (
+            rpy_cmd.T @ self.Qs_rpy @ rpy_cmd
+        )  # ca.mtimes([rpy_cmd.T, self.Qs_rpy, rpy_cmd])
+        drpy_cost = (
+            drpy_cmd.T @ self.Qs_drpy @ drpy_cmd
+        )  # ca.mtimes([drpy_cmd.T, self.Qs_drpy, drpy_cmd])
         # Progress rate cost
         dtheta_cost = -dtheta * self.Q_dtheta
         ddtheta_cost = ddtheta_cmd * self.R_dtheta * ddtheta_cmd
@@ -747,34 +755,35 @@ class DroneDynamics(BaseDynamics):
         updated = False
         if init and self.p is not None:
             self.param_values = np.zeros((self.p.size()[0],))
-            if self.useObstacleConstraints:
-                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+            if self.obstacle_info["use"]:
+                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacles_pos[
                     :, :-1
                 ].flatten()
             if self.pathPlanner.parametric:
                 self.param_values[self.param_indices["path"]] = self.pathPlanner.path_params_values
-            if self.useTunnelConstraints:
+            if self.tunnel_info["use"]:
+                # print(self.param_indices)
                 self.param_values[self.param_indices["gate_thetas"]] = (
                     self.pathPlanner.theta_switch[1 : self.gates_visited.size + 1]
                 )
                 self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
             updated = True
         elif obs is not None and self.p is not None:
-            if self.useObstacleConstraints and np.any(
-                np.not_equal(self.obstacles_visited, obs["obstacles_visited"])
-            ):
-                # if self.useObstacleConstraints:
+            # if self.obstacle_info["use"] and np.any(
+            #     np.not_equal(self.obstacles_visited, obs["obstacles_visited"])
+            # ):
+            if self.obstacle_info["use"]:
                 self.obstacles_visited = obs["obstacles_visited"]
                 self.obstacles_pos = obs["obstacles_pos"]
-                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacle_pos[
+                self.param_values[self.param_indices["obstacles_pos"]] = self.obstacles_pos[
                     :, :-1
                 ].flatten()
-                print("Obstacle positions updated")
+                # print("Obstacle positions updated")
                 updated = True
-            # if self.pathPlanner.parametric:
-            if self.pathPlanner.parametric and np.any(
-                np.not_equal(self.gates_visited, obs["gates_visited"])
-            ):
+            if self.pathPlanner.parametric:
+                # if self.pathPlanner.parametric and np.any(
+                #     np.not_equal(self.gates_visited, obs["gates_visited"])
+                # ):
                 self.gates_visited = obs["gates_visited"]
                 self.gates_pos = obs["gates_pos"]
                 self.gates_rpy = obs["gates_rpy"]
@@ -782,7 +791,7 @@ class DroneDynamics(BaseDynamics):
                 self.param_values[self.param_indices["path"]] = self.pathPlanner.path_params_values
                 self.param_values[self.param_indices["gates_pos"]] = self.gates_pos.flatten()
                 updated = True
-                print("Gates positions updated")
+                # print("Gates positions updated")
 
         return updated
 
@@ -804,9 +813,28 @@ class DroneDynamics(BaseDynamics):
         self.addToConstraints(quat_constraints, quat_constraints_lh, quat_constraints_uh, "quat")
 
     def addToConstraints(
-        self, nl_constr: ca.MX, lh: np.ndarray, uh: np.ndarray, nl_const_name: str
+        self,
+        nl_constr: ca.MX,
+        lh: np.ndarray,
+        uh: np.ndarray,
+        nl_const_name: str,
+        soft: bool = False,
+        soft_penalty: float = 1e3,
+        slack_lh: float = None,
+        slack_uh: float = None,
     ):
-        """Add the non-linear constraints to the existing constraints."""
+        """Add the non-linear constraints to the existing constraints.
+
+        Args:
+            nl_constr (ca.MX): Non-linear constraints
+            lh (np.ndarray): Lower bound of the constraints
+            uh (np.ndarray): Upper bound of the constraints
+            nl_const_name (str): Name of the constraints
+            soft (bool, optional): Whether the constraints are soft. Defaults to False.
+            soft_penalty (float, optional): Penalty for the soft constraints. Defaults to 1e3.
+            slack_lh (float, optional): Bound of the lower slack variable. Defaults to None.
+            slack_uh (float, optional): Bound of the upper slack variable. Defaults to None.
+        """
         if self.nl_constr is None:
             self.nl_constr = nl_constr
             self.nl_constr_lh = lh
@@ -819,6 +847,40 @@ class DroneDynamics(BaseDynamics):
             self.current_nl_constr_index, self.current_nl_constr_index + len(lh)
         )
         self.current_nl_constr_index += len(lh)
+
+        if soft:
+            if self.softConstrIdx is None:
+                self.softConstrIdx = self.nl_constr_indices[nl_const_name]
+                self.softConstr_lh = (
+                    slack_lh * np.ones((lh.shape[0],))
+                    if slack_lh is not None
+                    else np.zeros((lh.shape[0],))
+                )
+                self.softConstr_uh = (
+                    slack_uh * np.ones((uh.shape[0],))
+                    if slack_uh is not None
+                    else np.zeros((uh.shape[0],))
+                )
+                self.softConstrPenalties = soft_penalty * np.ones((lh.shape[0],))
+            else:
+                self.softConstrIdx = np.concatenate(
+                    [self.softConstrIdx, self.nl_constr_indices[nl_const_name]]
+                )
+                lh_soft = (
+                    slack_lh * np.ones((lh.shape[0],))
+                    if slack_lh is not None
+                    else np.zeros((lh.shape[0],))
+                )
+                uh_soft = (
+                    slack_uh * np.ones((uh.shape[0],))
+                    if slack_uh is not None
+                    else np.zeros((uh.shape[0],))
+                )
+                self.softConstr_lh = np.concatenate([self.softConstr_lh, lh_soft])
+                self.softConstr_uh = np.concatenate([self.softConstr_uh, uh_soft])
+                self.softConstrPenalties = np.concatenate(
+                    [self.softConstrPenalties, soft_penalty * np.ones((lh.shape[0],))]
+                )
 
     def addToParameters(self, param: ca.MX, param_name: str):
         """Add the parameters to the existing parameters."""
@@ -834,7 +896,7 @@ class DroneDynamics(BaseDynamics):
 
     def setupObstacleConstraints(self):
         """Setup the obstacle constraints for the drone/environment controller."""
-        num_obstacles = self.obstacle_pos.shape[0]
+        num_obstacles = self.obstacles_pos.shape[0]
         num_params_per_obstacle = 2
         num_params_obstacle = num_obstacles * num_params_per_obstacle
         # Parameters for the obstacle positions
@@ -843,22 +905,36 @@ class DroneDynamics(BaseDynamics):
         pos = self.x[self.state_indices["pos"]]
         obstacle_constraints = []
         for k in range(num_obstacles):
-            obstacle_constraints.append(
+            distance = ca.norm_2(
                 ca.norm_2(
                     pos[:num_params_per_obstacle]
                     - obstacles_pos_sym[
                         k * num_params_per_obstacle : (k + 1) * num_params_per_obstacle
                     ]
                 )
-                - self.obstacle_diameter
+                - self.obstacle_info["diameter"]
+            )
+            obstacle_constraints.append(
+                ca.if_else(
+                    pos[2] <= self.obstacles_pos[k, -1] + 0.05,
+                    distance,
+                    pos[2] - self.obstacles_pos[k, -1] + 0.05,
+                )
             )
 
         obstacle_constraints_lh = np.zeros((num_obstacles,))
         obstacle_constraints_uh = np.ones((num_obstacles,)) * 1e9
         obstacle_constraints = ca.vertcat(*obstacle_constraints)
-        # Add the obstacle constraints to the the constraints
+        # Add the obstacle constraints to the constraints
         self.addToConstraints(
-            obstacle_constraints, obstacle_constraints_lh, obstacle_constraints_uh, "obstacles"
+            obstacle_constraints,
+            obstacle_constraints_lh,
+            obstacle_constraints_uh,
+            "obstacles",
+            self.obstacle_info["soft"],
+            self.obstacle_info["softPenalty"],
+            self.obstacle_info["minDistance"] - self.obstacle_info["diameter"],
+            None,
         )
         self.addToParameters(obstacles_pos_sym, "obstacles_pos")
         print("Obstacle constraints set up.")
@@ -880,39 +956,50 @@ class DroneDynamics(BaseDynamics):
             theta=theta, path_params=self.p[self.param_indices["path"]]
         )["dpath"]
 
-        ddpath = self.pathPlanner.ddpath_function(
-            theta=theta, path_params=self.p[self.param_indices["path"]]
-        )["ddpath"]
-
         t = dpath / ca.norm_2(dpath)  # Normalized Tangent vector at the current progress
-        n = ddpath / ca.norm_2(ddpath)  # Normal vector at the current progress
+        n = ca.jacobian(t, theta)
+        n = n / ca.norm_2(n)
+        # @ (ddpath / ca.norm_2(ddpath))  # Normal vector at the current progress
         # n = ca.vertcat(-t[1], t[0], 0)  # Normal vector at the current progress
         b = ca.cross(t, n)  # Binormal vector at the current progress
 
-        # def getTunnelWidth2(gates_pos_sym: ca.MX, pos: ca.MX) -> ca.MX:
-        #     """Calculate the tunnel width at the current progress."""
-        #     # Calculate the progress distance to the nearest gate
-        #     d = ca.MX.zeros(self.gates_pos.shape[0])
-        #     for k in range(self.gates_pos.shape[0]):
-        #         d[k] = ca.norm_2(gates_pos_sym[k * 3 : (k + 1) * 3] - pos)
-        #     dmin = ca.mmin(d)
-        #     sigmoid = 1 / (
-        #         1 + ca.exp(-self.tunnelTransitionSteepness * (dmin - self.tunnelTransitionMargin))
-        #     )
-        #     return self.Wn + (self.Wgate - self.Wn) * sigmoid
+        def getTunnelWidth2(gates_pos_sym: ca.MX, pos: ca.MX) -> ca.MX:
+            """Calculate the tunnel width at the current progress."""
+            # Calculate the progress distance to the nearest gate
+            d = ca.MX.zeros(self.gates_pos.shape[0])
+            for k in range(self.gates_pos.shape[0]):
+                d[k] = ca.norm_2(gates_pos_sym[k * 3 : (k + 1) * 3] - pos)
+            dmin = ca.mmin(ca.fabs(gate_thetas - theta))
+            sigmoid = 1 / (
+                1
+                + ca.exp(
+                    -self.tunnel_info["transitionSlope"]
+                    * (dmin - self.tunnel_info["transitionMidpoint"])
+                )
+            )
+            return (
+                self.tunnel_info["Wgate"]
+                + (self.tunnel_info["Wn"] - self.tunnel_info["Wgate"]) * sigmoid
+            )
 
         def getTunnelWidth(gate_thetas: ca.MX, theta: ca.MX) -> ca.MX:
             """Calculate the tunnel width at the current progress."""
             # Calculate the progress distance to the nearest gate
             d = ca.mmin(ca.fabs(gate_thetas - theta))
             sigmoid = 1 / (
-                1 + ca.exp(-self.tunnelTransitionSteepness * (d - self.tunnelTransitionMargin))
+                1
+                + ca.exp(
+                    -self.tunnel_info["transitionSlope"]
+                    * (d - self.tunnel_info["transitionMidpoint"])
+                )
             )
-            return self.Wgate + (self.Wn - self.Wgate) * sigmoid
-            # return self.Wn + (self.Wgate - self.Wn) * sigmoid
+            return (
+                self.tunnel_info["Wgate"]
+                + (self.tunnel_info["Wn"] - self.tunnel_info["Wgate"]) * sigmoid
+            )
 
-        W = getTunnelWidth(gate_thetas, theta)
-        # W = getTunnelWidth2(gates_pos_sym, pos)
+        W = getTunnelWidth2(gates_pos_sym, pos)
+        # W = getTunnelWidth(gate_thetas, theta)
         H = W
         # Left-lower corner of the tunnel around the path
         p0 = path - W * n - H * b
@@ -927,7 +1014,14 @@ class DroneDynamics(BaseDynamics):
         tunnel_constraints_uh = np.ones((len(tunnel_constraints))) * 1e9
         tunnel_constraints = ca.vertcat(*tunnel_constraints)
         self.addToConstraints(
-            tunnel_constraints, tunnel_constraints_lh, tunnel_constraints_uh, "tunnel"
+            tunnel_constraints,
+            tunnel_constraints_lh,
+            tunnel_constraints_uh,
+            "tunnel",
+            self.tunnel_info["soft"],
+            self.tunnel_info["softPenalty"],
+            slack_lh=0.4 * np.ones((len(tunnel_constraints_lh),)),
+            slack_uh=None,
         )
         print("Tunnel constraints set up.")
 
@@ -954,7 +1048,7 @@ class DroneDynamics(BaseDynamics):
         # State limits (from the observation space, )
         x_y_max = 3.0
         z_max = 2.5
-        z_min = 0.10  # Drone starts ~5 cm above the ground + 5cm margin to avoid hitting the ground
+        z_min = 0.05  # Drone starts ~5 cm above the ground + 5cm margin to avoid hitting the ground
         rpy_max = 75 / 180 * np.pi  # 85 degrees in radians, reduced to 75 for safety
         large_val = 1e2
         self.pos_lb = np.array([-x_y_max, -x_y_max, z_min]).T
@@ -970,6 +1064,12 @@ class DroneDynamics(BaseDynamics):
         # Quaternion bounds are implemented as non-linear constraints. Define loose placeholder bounds here.
         self.quat_lb = -1e3 * np.ones((4,))
         self.quat_ub = 1e3 * np.ones((4,))
+
+        # Soft Bounds Initialization
+        self.slackControls_lb = None
+        self.slackControls_ub = None
+        self.slackStates_lb = None
+        self.slackStates_ub = None
 
     def setupSystemIDBounds(self):
         """Setup the bounds for the system identification model."""
@@ -1008,9 +1108,15 @@ class DroneDynamics(BaseDynamics):
         self.slackStates = np.array(
             [self.state_indices["pos"][-1]]
         )  # Only z_position has slack variables
+        # Bounds for the state slack variables
+        self.slackStates_lb = np.array(0.05)
+        self.slackStates_ub = np.array(0)
         self.slackControls = np.array(
             [self.control_indices["dftot_cmd"], self.control_indices["ddtheta_cmd"]]
         )
+        # Bounds for the control slack variables
+        self.slackControls_lb = np.array([0.5, 0.05])
+        self.slackControls_ub = np.array([0.5, 0.05])
 
         self.x_scal = self.x_ub - self.x_lb
         self.u_scal = self.u_ub - self.u_lb

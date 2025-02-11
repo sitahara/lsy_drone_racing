@@ -135,52 +135,124 @@ class AcadosOptimizer(BaseOptimizer):
         ocp.constraints.lbx_e = ocp.constraints.lbx
         ocp.constraints.ubx_e = ocp.constraints.ubx
 
+        # Set the nonlinear constraints
+        if self.dynamics.nl_constr is not None:
+            ocp.model.con_h_expr = self.dynamics.nl_constr
+            ocp.model.con_h_expr_0 = self.dynamics.nl_constr
+            ocp.constraints.lh = self.dynamics.nl_constr_lh
+            ocp.constraints.lh_0 = self.dynamics.nl_constr_lh
+            ocp.constraints.uh = self.dynamics.nl_constr_uh
+            ocp.constraints.uh_0 = self.dynamics.nl_constr_uh
+            # Set soft constraints (Only lower bounds must be set)
+            if self.dynamics.softConstrIdx is not None:
+                ocp.constraints.idxsh = self.dynamics.softConstrIdx
+                ocp.constraints.idxsh_0 = self.dynamics.softConstrIdx
+                ocp.constraints.lsh = self.dynamics.softConstr_lh
+                ocp.constraints.lsh_0 = self.dynamics.softConstr_lh
+                ocp.constraints.ush = self.dynamics.softConstr_uh
+                ocp.constraints.ush_0 = self.dynamics.softConstr_uh
+
+                nsh = len(ocp.constraints.idxsh)
+                softPenaltyVector = self.dynamics.softConstrPenalties
         # Set soft constraints
-        if self.useSoftConstraints:
-            # Define the penalty matrices Zl and Zu (we use the same for all states and controls)
-            norm2_penalty = self.softPenalty
-            norm1_penalty = self.softPenalty
-            # upperSlackBounds are 1 by default, optimize if needed
-
-            # Define slack variables and limits
+        if self.useSoftBounds:
+            # Define slack variables and limits for state bounds
             ocp.constraints.idxsbx = self.dynamics.slackStates
-            nsx = len(ocp.constraints.idxsbx)
-            ocp.constraints.lsbx = np.zeros((nsx,))
-            ocp.constraints.usbx = np.ones((nsx,))
+            nsbx = len(ocp.constraints.idxsbx)
+            ocp.constraints.lsbx = (
+                np.ones((nsbx,))
+                if self.dynamics.slackStates_lb is None
+                else self.dynamics.slackStates_lb
+            )
+            ocp.constraints.usbx = (
+                np.ones((nsbx,))
+                if self.dynamics.slackStates_ub is None
+                else self.dynamics.slackStates_ub
+            )
+            # ocp.constraints.idxsbx_e = ocp.constraints.idxsbx
+            # ocp.constraints.lsbx_e = ocp.constraints.lsbx
+            # ocp.constraints.usbx_e = ocp.constraints.usbx
 
-            ocp.constraints.idxsbx_e = ocp.constraints.idxsbx
-            ocp.constraints.lsbx_e = ocp.constraints.lsbx
-            ocp.constraints.usbx_e = ocp.constraints.usbx
-
+            # Define slack variables and limits for control bounds
             ocp.constraints.idxsbu = self.dynamics.slackControls
-            nsu = len(ocp.constraints.idxsbu)
-            ocp.constraints.lsbu = np.zeros((nsu,))
-            ocp.constraints.usbu = np.ones((nsu,))
-            # Define the soft constraints weights
-            nsy = nsx + nsu
-            ocp.cost.Zl = norm2_penalty * np.ones((nsy,))
-            ocp.cost.Zu = norm2_penalty * np.ones((nsy,))
-            ocp.cost.zl = norm1_penalty * np.ones((nsy,))
-            ocp.cost.zu = norm1_penalty * np.ones((nsy,))
+            nsbu = len(ocp.constraints.idxsbu)
+            ocp.constraints.lsbu = (
+                np.ones((nsbu,))
+                if self.dynamics.slackControls_lb is None
+                else self.dynamics.slackControls_lb
+            )
+            ocp.constraints.usbu = (
+                np.ones((nsbu,))
+                if self.dynamics.slackControls_ub is None
+                else self.dynamics.slackControls_ub
+            )
+            # Define the penalty matrices Zl and Zu (we use the same for all states and controls)
+            norm2_penalty = self.softBoundPenalty
+            norm1_penalty = 0  # self.softBoundPenalty
 
-            ocp.cost.Zl_e = norm2_penalty * np.ones((nsx,))
-            ocp.cost.Zu_e = norm2_penalty * np.ones((nsx,))
-            ocp.cost.zl_e = norm1_penalty * np.ones((nsx,))
-            ocp.cost.zu_e = norm1_penalty * np.ones((nsx,))
+            Zl_0 = norm2_penalty * np.ones(nsbu)
+            Zu_0 = norm2_penalty * np.ones(nsbu)
+            Zl = norm2_penalty * np.ones(nsbx + nsbu)
+            Zu = norm2_penalty * np.ones(nsbx + nsbu)
+            # Zl_e = norm2_penalty * np.ones(nsbx)
+            # Zu_e = norm2_penalty * np.ones(nsbx)
 
-            ocp.cost.Zl_0 = norm2_penalty * np.ones((nsu,))
-            ocp.cost.Zu_0 = norm2_penalty * np.ones((nsu,))
-            ocp.cost.zl_0 = norm1_penalty * np.ones((nsu,))
-            ocp.cost.zu_0 = norm1_penalty * np.ones((nsu,))
+            zl_0 = norm1_penalty * np.ones(nsbu)
+            zu_0 = norm1_penalty * np.ones(nsbu)
+            zl = norm1_penalty * np.ones(nsbx + nsbu)
+            zu = norm1_penalty * np.ones(nsbx + nsbu)
+            # zl_e = norm1_penalty * np.ones(nsbx)
+            # zu_e = norm1_penalty * np.ones(nsbx)
+
+        if self.dynamics.softConstrIdx is not None:
+            if self.useSoftBounds:
+                Zl_0 = np.concatenate((Zl_0, softPenaltyVector))
+                Zu_0 = np.concatenate((Zu_0, softPenaltyVector))
+                Zl = np.concatenate((Zl, softPenaltyVector))
+                Zu = np.concatenate((Zu, softPenaltyVector))
+                # Zl_e = np.concatenate((Zl_e, softPenaltyVector))
+                # Zu_e = np.concatenate((Zu_e, softPenaltyVector))
+                zl_0 = np.concatenate((zl_0, np.zeros((nsh,))))
+                zu_0 = np.concatenate((zu_0, np.zeros((nsh,))))
+                zl = np.concatenate((zl, np.zeros((nsh,))))
+                zu = np.concatenate((zu, np.zeros((nsh,))))
+                # zl_e = np.concatenate((zl_e, np.zeros((nsh,))))
+                # zu_e = np.concatenate((zu_e, np.zeros((nsh,))))
+            else:
+                Zl_0 = softPenaltyVector
+                Zu_0 = softPenaltyVector
+                Zl = softPenaltyVector
+                Zu = softPenaltyVector
+                # Zl_e = softPenaltyVector
+                # Zu_e = softPenaltyVector
+                zl_0 = np.zeros((nsh,))
+                zu_0 = np.zeros((nsh,))
+                zl = np.zeros((nsh,))
+                zu = np.zeros((nsh,))
+                # zl_e = np.zeros((nsh,))
+                # zu_e = np.zeros((nsh,))
+
+        # Define the soft constraints weights
+        # Sequence is: [s_bu,s_bx,s_g,s_h], where bu is control bounds, bx is state bounds, g is equality constraints, h is inequality constraints
+        # Zu is L2 penalty for upper slacks, zu is L1 penalty for upper slacks
+        # Zl is L2 penalty for lower slacks, zl is L1 penalty for lower slacks
+        print("Zl_0", Zl_0, self.useSoftBounds, self.dynamics.softConstrIdx)
+        if self.useSoftBounds or self.dynamics.softConstrIdx is not None:
+            ocp.cost.Zl_0 = Zl_0
+            ocp.cost.Zu_0 = Zu_0
+            ocp.cost.zl_0 = zl_0
+            ocp.cost.zu_0 = zu_0
+            ocp.cost.Zl = Zl
+            ocp.cost.Zu = Zu
+            ocp.cost.zl = zl
+            ocp.cost.zu = zu
+            # ocp.cost.Zl_e = Zl_e
+            # ocp.cost.Zu_e = Zu_e
+            # ocp.cost.zl_e = zl_e
+            # ocp.cost.zu_e = zu_e
 
         # Set initial state (not required and should not be set for moving horizon estimation)
         # ocp.constraints.x0 = self.x0
-
-        # Set nonlinear constraints (taken from the dynamics)
-        if self.dynamics.nl_constr is not None:
-            ocp.model.con_h_expr = self.dynamics.nl_constr
-            ocp.constraints.lh = self.dynamics.nl_constr_lh
-            ocp.constraints.uh = self.dynamics.nl_constr_uh
 
         # Initialize the parameters (if any)
         if self.dynamics.param_values is not None:
@@ -214,7 +286,7 @@ class AcadosOptimizer(BaseOptimizer):
                 self.json_file,
                 build=self.solver_options.get("build", True),
                 generate=self.solver_options.get("generate", True),
-                verbose=False,
+                verbose=self.solver_options.get("verbose", False),
             )
             # self.ocp_sim = AcadosSim(self.ocp)
             # self.ocp_integrator = AcadosSimSolver(
