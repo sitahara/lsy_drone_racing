@@ -83,10 +83,26 @@ class TestHermiteSpline(unittest.TestCase):
         ax = fig.add_subplot(111, projection="3d")
 
         # Plot the path
+        ax.scatter(
+            self.gate_positions[:, 0],
+            self.gate_positions[:, 1],
+            self.gate_positions[:, 2],
+            color="red",
+            label="Gates",
+            s=70,
+        )
+        ax.scatter(
+            self.start_position[0],
+            self.start_position[1],
+            self.start_position[2],
+            color="blue",
+            label="Start",
+            s=70,
+        )
         ax.plot(path_points[:, 0], path_points[:, 1], path_points[:, 2], label="Path")
 
         # Plot the tunnel boundaries
-        for i in range(0, len(theta_values), 10):  # Adjust the step size for fewer arrows
+        for i in range(0, len(theta_values), 20):  # Adjust the step size for fewer arrows
             ax.quiver(
                 path_points[i, 0],
                 path_points[i, 1],
@@ -95,7 +111,7 @@ class TestHermiteSpline(unittest.TestCase):
                 tangent_vectors[i, 1],
                 tangent_vectors[i, 2],
                 color="r",
-                length=0.1,
+                length=0.2,
                 normalize=True,
                 label="Tangent" if i == 0 else "",
             )
@@ -107,7 +123,7 @@ class TestHermiteSpline(unittest.TestCase):
                 normal_vectors[i, 1],
                 normal_vectors[i, 2],
                 color="g",
-                length=0.1,
+                length=0.2,
                 normalize=True,
                 label="Normal" if i == 0 else "",
             )
@@ -119,18 +135,10 @@ class TestHermiteSpline(unittest.TestCase):
                 binormal_vectors[i, 1],
                 binormal_vectors[i, 2],
                 color="b",
-                length=0.1,
+                length=0.2,
                 normalize=True,
                 label="Binormal" if i == 0 else "",
             )
-            ax.plot(
-                [path_points[i, 0], p0_points[i, 0]],
-                [path_points[i, 1], p0_points[i, 1]],
-                [path_points[i, 2], p0_points[i, 2]],
-                "k--",
-                label="Tunnel Boundary" if i == 0 else "",
-            )
-            # Plot the rectangle representing the tunnel cross-section
             ax.plot(
                 [
                     p0_points[i, 0],
@@ -154,12 +162,15 @@ class TestHermiteSpline(unittest.TestCase):
                     p0_points[i, 2],
                 ],
                 "k-",
+                label="Tunnel Cross-Section" if i == 0 else "",
             )
 
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.legend()
+        ax.set_xlabel("X", fontsize=14)
+        ax.set_ylabel("Y", fontsize=14)
+        ax.set_zlabel("Z", fontsize=14)
+        ax.legend(fontsize=12, loc="lower left")
+        ax.tick_params(axis="both", which="major", labelsize=12)
+        ax.set_title("Hermite Spline Path and Tunnel Boundaries", fontsize=16)
         plt.show()
 
     # def test_plot_frenet_frame(self):

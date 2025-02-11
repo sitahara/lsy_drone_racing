@@ -1,10 +1,10 @@
 [dynamics_info]
-interface = "Thrust" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
-dynamicsType= "system_id" # "Quaternion", "Euler", "system_id"
+interface = "Mellinger" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
+dynamicsType= "system_id" # "AugQuaternion","AugEuler","Quaternion", "Euler", "system_id"
 referenceTracking = true # false, # whether to use reference tracking MPC or MPCC, MPCC uses hermite_spline and system_id dynamics
 referenceType = "hermite_spline" # "cubic_spline", "frenet", "hermite_spline" # which type of reference trajectory to use
 ts = 0.016666 # time step of mpc
-n_horizon = 60 # prediction horizon of mpc
+n_horizon = 90 # prediction horizon of mpc
 controlType = "Thrusts" # "Thrusts", "Torques", "RPMs"
 useControlRates = false # always true for system_id dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used

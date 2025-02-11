@@ -14,13 +14,7 @@ from scipy.interpolate import CubicSpline
 from scipy.spatial.transform import Rotation as Rmat
 
 from lsy_drone_racing.control import BaseController
-from lsy_drone_racing.mpc_utils import (
-    AcadosOptimizer,
-    DroneDynamics,
-    HermiteSpline,
-    IPOPTOptimizer,
-    MPCCppDynamics,
-)
+from lsy_drone_racing.mpc_utils import AcadosOptimizer, DroneDynamics, HermiteSpline, IPOPTOptimizer
 from lsy_drone_racing.planner import Planner
 
 if TYPE_CHECKING:
@@ -181,7 +175,7 @@ class MPC(BaseController):
             if self.dynamics.interface == "Mellinger":
                 action = np.zeros((13,))
                 action[:3] = self.initial_obs["pos"]
-                action[2] = 0.2
+                action[2] = 0.3
             else:
                 action = np.zeros((4, 1))
                 action[0] = self.dynamics.mass * self.dynamics.g * 1.3
@@ -189,6 +183,7 @@ class MPC(BaseController):
                 self.control_state = 1
         else:
             self.updateTargetTrajectory()
+
             start_time = time.time()
             if self.opt is None:
                 action = self.ipopt.step(self.current_state, self.x_ref, self.u_ref)
@@ -206,6 +201,8 @@ class MPC(BaseController):
                     action[6:9] = np.zeros(3)
                 elif self.dynamics.interface == "Thrust":
                     print("Commanded Total Thrust:", action[0], "Commanded RPY:", action[1:])
+            # action = np.zeros((13,))
+            # action[:3] = self.x_ref[:3, 1]
 
         return action.flatten()
 
