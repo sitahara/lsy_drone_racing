@@ -27,10 +27,10 @@ class IPOPTOptimizer(BaseOptimizer):
         U_lb = opti.parameter(self.nu, 1)  # Control lower bound
         U_ub = opti.parameter(self.nu, 1)  # Control upper bound
 
-        if self.useSoftConstraints:
+        if self.useSoftBounds:
             s_x = opti.variable(self.nx, self.n_horizon + 1)  # Slack for state constraints
             s_u = opti.variable(self.nu, self.n_horizon)  # Slack for control constraints
-            slack_penalty = self.softPenalty
+            slack_penalty = self.softBoundPenalty
         else:
             s_x = np.zeros((self.nx, self.n_horizon + 1))
             s_u = np.zeros((self.nu, self.n_horizon))

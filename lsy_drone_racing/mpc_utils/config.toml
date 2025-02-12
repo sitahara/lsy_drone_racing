@@ -1,16 +1,18 @@
 [dynamics_info]
-interface = "Thrust" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
-dynamicsType= "system_id" # "Quaternion", "Euler", "system_id"
+interface = "Mellinger" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
+dynamicsType= "system_id" # "AugQuaternion","AugEuler","Quaternion", "Euler", "system_id"
 referenceTracking = true # false, # whether to use reference tracking MPC or MPCC, MPCC uses hermite_spline and system_id dynamics
 referenceType = "hermite_spline" # "cubic_spline", "frenet", "hermite_spline" # which type of reference trajectory to use
 ts = 0.016666 # time step of mpc
-n_horizon = 60 # prediction horizon of mpc
+n_horizon = 90 # prediction horizon of mpc
 controlType = "Thrusts" # "Thrusts", "Torques", "RPMs"
 useControlRates = false # always true for system_id dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
 start_controller = false # Whether to use a start controller until a certain height has been reached
 firstGuess = "acados" #"ipopt", 
+visualize=true
+printInfo=false
 [dynamics_info.ukf_info]
 useUKF=false # Whether to use UnscentedKalmanFilter
 measurement_noise=0.01 # std
@@ -19,6 +21,7 @@ process_noise= 0.01 # std
 
 [cost_info] # Optimize through TurBO
 [cost_info.linear] # For linear least squares cost (all referenceTracking formulations)
+cost_type = "linear"
 Qs_pos = 5 #4
 Qs_vel = 0.05
 Qs_rpy = 0.6
@@ -33,27 +36,35 @@ R_f = 0.2 # individual motor thrusts
 R_df = 0.01 # individual motor thrust rates
 R_torques = 0.1 # torques [tau_x,tau_y,tau_z]
 [cost_info.mpcc]
+cost_type="mpcc"
 Qs_l = 1 # lag weights
 Qs_c = 1 # contour weights
-Qs_rpy = 0.5 # RPY weights
+Qs_rpy = 10000 # RPY weights
 Qs_drpy = 0.1 # ang vel weights
 R_f = 0.2 # individual motor thrusts
 R_df = 0.01 # thrust rate weights
-Q_dtheta = 1 # L1 dtheta weight
+Q_dtheta = 0.01 # L1 dtheta weight
 R_ddtheta = 0.01 # L2 dtheta weight 
 
 [constraints_info]
-useObstacleConstraints = true
-obstacle_diameter = 0.20
-useTunnelConstraints = false # only for parametric hermite spline
-Wn = 0.8# Nominal Tunnel Width
-Wgate = 0.2 # Tunnel Width at gates, # Gate size: [0.45,0.45]
-tunnelTransitionMargin = 0.03 # Midpoint of the Tunnel Transition sigmoid
-tunnelTransitionSteepness = 100 # Steepness of the Tunnel Transition sigmoid
+obstacles.use = true
+obstacles.diameter = 0.20
+obstacles.soft = true
+obstacles.softPenalty = 1e7
+obstacles.minDistance = 0.10
+tunnel.use = true
+tunnel.Wn = 0.4 # Nominal Tunnel Width
+tunnel.Wgate = 0.03 # Tunnel Width at gates, # Gate size: [0.45,0.45]
+tunnel.transitionMidpoint = 0.07 # Midpoint of the Tunnel Transition sigmoid
+tunnel.transitionSlope = 100 # Steepness of the Tunnel Transition sigmoid
+tunnel.distanceParameterization = "theta" # "theta", "pos"
+tunnel.soft = true
+tunnel.maxAdditionalWidth = 0.4
+tunnel.softPenalty = 1e10 #
 
 [optimizer_info]
-useSoftConstraints = true
-softPenalty = 1e4
+useSoftBounds = true
+softBoundPenalty = 1e4
 useGP = false # Not finished yet
 useZoro = false # Not Implemented yet
 export_dir ="generated_code/mpc"
@@ -61,7 +72,7 @@ json_file = "acados_ocp.json"
 
 [solver_options]
 ipopt.print_level= 0
-ipopt.tol= 1e-3
+ipopt.tol= 1e-4
 ipopt.max_iter=50
 ipopt.linear_solver= "mumps"
 acados.nlp_solver= "SQP_RTI"
@@ -69,8 +80,14 @@ acados-integrator= "ERK"
 acados.cost_discretization= "EULER"
 acados.qp_solver= "PARTIAL_CONDENSING_HPIPM"
 acados.globalization= "MERIT_BACKTRACKING"
-acados.tol= 1e-3
-acados.qp_tol= 1e-3
+acados.tol= 1e-4
+acados.qp_tol= 1e-4
 acados.build=true
 acados.generate=true
+acados.verbose=false
 
+[hermite_spline_info]
+tangent_scaling = 3
+debug = false
+end_at_start = false
+reverse_start_orientation = false

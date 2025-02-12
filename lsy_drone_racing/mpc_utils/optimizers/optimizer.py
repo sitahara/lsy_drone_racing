@@ -12,8 +12,8 @@ class BaseOptimizer(ABC):
     def __init__(self, dynamics, solver_options, optimizer_info):
         self.solver_options = solver_options
         self.optimizer_info = optimizer_info
-        self.useSoftConstraints = self.optimizer_info.get("useSoftConstraints", True)
-        self.softPenalty = self.optimizer_info.get("softPenalty", 1e3)
+        self.useSoftBounds = self.optimizer_info.get("useSoftBounds", True)
+        self.softBoundPenalty = self.optimizer_info.get("softBoundPenalty", 1e3)
         self.dynamics = dynamics
         self.n_horizon = dynamics.n_horizon
         self.ts = dynamics.ts
