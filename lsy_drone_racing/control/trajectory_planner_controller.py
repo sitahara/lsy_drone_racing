@@ -50,6 +50,8 @@ class TrajectoryController(BaseController):
             MAX_CURVATURE=100.0,
         )
 
+        self.control_state = 0 # 0: takeoff, 1: planner
+
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
     ) -> NDArray[np.floating]:
@@ -113,18 +115,34 @@ class TrajectoryController(BaseController):
                     )
         t1=time.time()
         print(t1-t0)
-        return np.concatenate(
-            (
-                np.array(
-                    [
-                        result_path.x[self.SAMPLE_IDX],
-                        result_path.y[self.SAMPLE_IDX],
-                        result_path.z[self.SAMPLE_IDX],
-                    ]
-                ),
-                np.zeros(10),
+        if self.control_state == 0:
+            if obs["pos"][1] >= 0.2:
+                self.control_state = 1
+            return np.concatenate(
+                (
+                    np.array(
+                        [
+                            result_path.x[self.SAMPLE_IDX],
+                            result_path.y[self.SAMPLE_IDX],
+                            result_path.z[self.SAMPLE_IDX],
+                        ]
+                    ),
+                    np.zeros(10),
+                )
             )
-        )
+        else:
+            return np.concatenate(
+                (
+                    np.array(
+                        [
+                            result_path.x[self.SAMPLE_IDX],
+                            result_path.y[self.SAMPLE_IDX],
+                            result_path.z[self.SAMPLE_IDX],
+                        ]
+                    ),
+                    np.zeros(10),
+                )
+            )
 
     def step_callback(
         self,
