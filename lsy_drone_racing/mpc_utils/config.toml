@@ -1,17 +1,17 @@
 [dynamics_info]
-interface = "Mellinger" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
+interface = "Thrust" # "Mellinger", "Thrust", # Note: system_id always uses Thrust interface
 dynamicsType= "system_id" # "AugQuaternion","AugEuler","Quaternion", "Euler", "system_id"
 referenceTracking = true # false, # whether to use reference tracking MPC or MPCC, MPCC uses hermite_spline and system_id dynamics
 referenceType = "hermite_spline" # "cubic_spline", "frenet", "hermite_spline" # which type of reference trajectory to use
 ts = 0.016666 # time step of mpc
-n_horizon = 90 # prediction horizon of mpc
+n_horizon = 60 # prediction horizon of mpc
 controlType = "Thrusts" # "Thrusts", "Torques", "RPMs"
 useControlRates = false # always true for system_id dynamics
 t_predict = 0 # Solve optimization problem for state predicted into the future, set t_predict to 0 when not used
 useDrags = true # Whether to include drag forces in the dynamics
 start_controller = false # Whether to use a start controller until a certain height has been reached
 firstGuess = "acados" #"ipopt", 
-visualize=true
+visualize=false
 printInfo=false
 [dynamics_info.ukf_info]
 useUKF=false # Whether to use UnscentedKalmanFilter
@@ -22,7 +22,7 @@ process_noise= 0.01 # std
 [cost_info] # Optimize through TurBO
 [cost_info.linear] # For linear least squares cost (all referenceTracking formulations)
 cost_type = "linear"
-Qs_pos = 5 #4
+Qs_pos = 10 #4
 Qs_vel = 0.05
 Qs_rpy = 0.6
 Qs_drpy = 0.1 # 0.05
@@ -48,18 +48,18 @@ R_ddtheta = 0.01 # L2 dtheta weight
 
 [constraints_info]
 obstacles.use = true
-obstacles.diameter = 0.20
-obstacles.soft = true
+obstacles.diameter = 0.25
+obstacles.soft = false
 obstacles.softPenalty = 1e7
 obstacles.minDistance = 0.10
 tunnel.use = true
-tunnel.Wn = 0.4 # Nominal Tunnel Width
-tunnel.Wgate = 0.03 # Tunnel Width at gates, # Gate size: [0.45,0.45]
+tunnel.Wn = 0.5 # Nominal Tunnel Width
+tunnel.Wgate = 0.05 # Tunnel Width at gates, # Gate size: [0.45,0.45]
 tunnel.transitionMidpoint = 0.07 # Midpoint of the Tunnel Transition sigmoid
 tunnel.transitionSlope = 100 # Steepness of the Tunnel Transition sigmoid
 tunnel.distanceParameterization = "theta" # "theta", "pos"
 tunnel.soft = true
-tunnel.maxAdditionalWidth = 0.4
+tunnel.maxAdditionalWidth = 0.3
 tunnel.softPenalty = 1e10 #
 
 [optimizer_info]
@@ -87,7 +87,7 @@ acados.generate=true
 acados.verbose=false
 
 [hermite_spline_info]
-tangent_scaling = 3
+tangent_scaling = 2
 debug = false
 end_at_start = false
-reverse_start_orientation = false
+reverse_start_orientation = true

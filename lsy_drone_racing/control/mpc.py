@@ -89,7 +89,7 @@ class MPC(BaseController):
                 MAX_ROAD_WIDTH=0.4,
                 SAFETY_MARGIN=0.1,
                 NUM_POINTS=self.n_horizon,
-                DT=0.1 / 3,
+                DT=0.1 / 5,
                 K_J=0.1,
                 MAX_CURVATURE=100.0,
             )
@@ -247,7 +247,8 @@ class MPC(BaseController):
             self.plot_counter = 0
         if self.plot_counter % 10 == 0:
             planned_pos = self.opt.x_last[self.dynamics.state_indices["pos"], :]
-            self.plotInPyBullet(planned_pos.T, lifetime=1, point_color=[0, 1, 0])
+            if self.visualize:
+                self.plotInPyBullet(planned_pos.T, lifetime=1, point_color=[0, 1, 0])
         self.plot_counter += 1
 
     def episode_callback(self):
@@ -281,7 +282,7 @@ class MPC(BaseController):
             self.opt.step(self.current_state, self.obs, self.x_ref, self.u_ref)
         self.n_step = 0
 
-    def set_target_trajectory(self, t_total: float = 9) -> None:
+    def set_target_trajectory(self, t_total: float = 8) -> None:
         """Set the target trajectory for the MPC controller."""
         self.n_step = 0  # current step for the target trajectory
         self.t_total = t_total
@@ -372,12 +373,14 @@ class MPC(BaseController):
                         result_path.z[:num_points],
                     ]
                 )
-                self.x_ref[:3, num_points:] = np.tile(
-                    np.array([result_path.x[-1], result_path.y[-1], result_path.z[-1]]).reshape(
-                        3, 1
-                    ),
-                    (1, self.n_horizon - num_points + 1),
-                )
+                if num_points < self.n_horizon + 1:
+                    self.x_ref[:3, num_points:] = np.tile(
+                        np.array([result_path.x[-1], result_path.y[-1], result_path.z[-1]]).reshape(
+                            3, 1
+                        ),
+                        (1, self.n_horizon - num_points + 1),
+                    )
+                # print(f"X_ref: {self.x_ref[:3, :]}")
                 if self.visualize:
                     self.plotInPyBullet(
                         np.array([result_path.x, result_path.y, result_path.z]).T,
