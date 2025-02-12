@@ -124,7 +124,7 @@ class Planner:
         ob_x = [ob_x[0], 0.5, ob_x[3], 0.0]
         ob_y = [ob_y[0], -1.5, ob_y[3], 1.0]
         ## Length of the vertex of the frame is 0.58m
-        line_length = 0.58 / 2
+        line_length = 0.55 / 2
 
         obs_center_x = (
             [ob_x[i] for i in range(len(ob_x))]
@@ -204,8 +204,8 @@ class Planner:
                 1,
                 0.975,
                 gate_x[0],
-                gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 + 0.3),
-                gate_x[0] + 0.7 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8),
+                gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 - 0.2),
+                gate_x[0] + 0.6 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8),
                 gate_x[1],
                 gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2),
             ]
@@ -213,8 +213,8 @@ class Planner:
                 1,
                 0.9,
                 gate_y[0],
-                gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 + 0.3),
-                gate_y[0] + 0.7 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8),
+                gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 - 0.2),
+                gate_y[0] + 0.6 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8),
                 gate_y[1],
                 gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2),
             ]
@@ -230,21 +230,24 @@ class Planner:
         elif next_gate == 2:
             real_wp_x = [
                 gate_x[0],
-                gate_x[0] + 0.65 * np.cos(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_x[0] + 0.05 * np.cos(gate_yaw[0] + np.pi / 2 - 0.2),
+                gate_x[0] + 0.6 * np.cos(gate_yaw[0] + np.pi / 2 + 0.8),
                 gate_x[1],
-                gate_x[1] - 0.0 * np.cos(gate_yaw[1]) + 0.1 * np.cos(gate_yaw[1] + np.pi / 2),
+                gate_x[1] + 0.05 * np.cos(gate_yaw[1] + np.pi / 2),
                 gate_x[2],
                 gate_x[2] + 0.05 * np.cos(gate_yaw[2] + np.pi / 2 + 0.6),
             ]
             real_wp_y = [
                 gate_y[0],
-                gate_y[0] + 0.65 * np.sin(gate_yaw[0] + np.pi / 2 + 0.7),
+                gate_y[0] + 0.05 * np.sin(gate_yaw[0] + np.pi / 2 - 0.2),
+                gate_y[0] + 0.6 * np.sin(gate_yaw[0] + np.pi / 2 + 0.8),
                 gate_y[1],
-                gate_y[1] - 0.0 * np.sin(gate_yaw[1]) + 0.1 * np.sin(gate_yaw[1] + np.pi / 2),
+                gate_y[1] + 0.05 * np.sin(gate_yaw[1] + np.pi / 2),
                 gate_y[2],
                 gate_y[2] + 0.05 * np.sin(gate_yaw[2] + np.pi / 2 + 0.6),
             ]
             real_wp_z = [
+                gate_z[0],
                 gate_z[0],
                 (gate_z[0] + gate_z[1]) / 2,
                 gate_z[1],
@@ -262,8 +265,8 @@ class Planner:
                 (gate_x[2] - 0.58 / 2 * np.cos(gate_yaw[2])) / 2,
                 (gate_x[2] - 0.58 / 2 * np.cos(gate_yaw[2])) / 2 - 0.2,
                 (gate_x[2] - 0.58 / 2 * np.cos(gate_yaw[2])) / 2 - 0.4,
-                gate_x[3] + 0.13,
-                gate_x[3] + 0.13 + 0.5 * np.cos(gate_yaw[3] + np.pi / 2 + 0.1),
+                gate_x[3],
+                gate_x[3] + 1.5 * np.cos(gate_yaw[3] + np.pi / 2 + 0.1),
             ]
             real_wp_y = [
                 gate_y[1] + 0.1 * np.sin(gate_yaw[1]),
@@ -275,7 +278,7 @@ class Planner:
                 (gate_y[2] - 0.58 / 2 * np.sin(gate_yaw[2]) + 1) / 2 + 0.1,
                 (gate_y[2] - 0.58 / 2 * np.sin(gate_yaw[2]) + 1) / 2 + 0.1,
                 gate_y[3],
-                gate_y[3] + 0.5 * np.sin(gate_yaw[3] + np.pi / 2 + 0.1),
+                gate_y[3] + 1.5 * np.sin(gate_yaw[3] + np.pi / 2 + 0.1),
             ]
 
             real_wp_z = [
