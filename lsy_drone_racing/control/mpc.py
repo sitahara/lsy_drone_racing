@@ -90,8 +90,9 @@ class MPC(BaseController):
                 SAFETY_MARGIN=0.1,
                 NUM_POINTS=self.n_horizon,
                 DT=0.1 / 5,
-                K_J=0.1,
-                MAX_CURVATURE=100.0,
+                K_J=1.0,
+                K_D=15.0,
+                MAX_CURVATURE=300.0,
             )
             constraints_info["tunnel"] = {"use": False}
         elif not self.referenceTracking or constraints_info.get("tunnel", {"use": False})["use"]:

@@ -172,18 +172,21 @@ class PlannerCore:
                 fp.z.append(iz)
 
             # Calculate yaw and ds
-            for i in range(len(fp.x) - 1):
-                dx = fp.x[i + 1] - fp.x[i]
-                dy = fp.y[i + 1] - fp.y[i]
-                fp.yaw.append(math.atan2(dy, dx))
-                fp.ds.append(np.hypot(dx, dy))
+            # for i in range(len(fp.x) - 1):
+            #     dx = fp.x[i + 1] - fp.x[i]
+            #     dy = fp.y[i + 1] - fp.y[i]
+            #     fp.yaw.append(math.atan2(dy, dx))
+            #     fp.ds.append(np.hypot(dx, dy))
+            fp.yaw = [math.atan2(fp.y[i + 1] - fp.y[i], fp.x[i + 1] - fp.x[i]) for i in range(len(fp.x) - 1)]
+            fp.ds = [math.hypot(fp.x[i + 1] - fp.x[i], fp.y[i + 1] - fp.y[i]) for i in range(len(fp.x) - 1)]
 
             fp.yaw.append(fp.yaw[-1])
             fp.ds.append(fp.ds[-1])
 
             # Calculate curvature
-            for i in range(len(fp.yaw) - 1):
-                fp.c.append((fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i])
+            # for i in range(len(fp.yaw) - 1):
+            #     fp.c.append((fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i])
+            fp.c = [(fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i] for i in range(len(fp.yaw) - 1)]
 
         return fplist
 
